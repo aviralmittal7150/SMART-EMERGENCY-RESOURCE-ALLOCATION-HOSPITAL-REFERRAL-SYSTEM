@@ -1,0 +1,22 @@
+{
+  "name": "smart-emergency-resource-allocation-system",
+  "version": "1.0.0",
+  "description": "Smart Emergency Resource Allocation & Hospital Referral System - OS + DBMS Engine",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/**/*.test.js",
+    "test:triage": "node --test tests/triage.test.js",
+    "test:ranking": "node --test tests/ranking.test.js",
+    "test:command": "node --test tests/command_center.test.js",
+    "test:locking": "node --test tests/locking.test.js",
+    "test:bankers": "node --test tests/bankers.test.js",
+    "test:lifecycle": "node --test tests/lifecycle.test.js",
+    "dev": "serve -l 3000 ."
+  },
+  "keywords": ["emergency", "hospital-referral", "operating-systems", "dbms", "priority-queue", "bankers-algorithm"],
+  "author": "Aviral Mittal",
+  "license": "MIT",
+  "devDependencies": {
+    "serve": "^14.2.4"
+  }
+}
