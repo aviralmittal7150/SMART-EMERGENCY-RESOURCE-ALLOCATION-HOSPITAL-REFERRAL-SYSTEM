@@ -1,29 +1,29 @@
 /* ====================================================================
-   ANIMATIONS & KEYFRAMES — Classy Light Medical Micro-Interactions
-   Spring-based easing · Clinical pulses · Staggered reveals
+   ANIMATIONS & KEYFRAMES — Linear SaaS Micro-Interactions
+   Subtle Spring Transitions · Status Pulses · Staggered Reveals
    ==================================================================== */
 
 @keyframes pulse-green {
   0% {
-    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.4);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
   }
   70% {
-    box-shadow: 0 0 0 8px rgba(5, 150, 105, 0);
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
   }
 }
 
 @keyframes pulse-red {
   0% {
-    box-shadow: 0 0 0 0 rgba(225, 29, 72, 0.5);
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.5);
   }
   70% {
-    box-shadow: 0 0 0 10px rgba(225, 29, 72, 0);
+    box-shadow: 0 0 0 10px rgba(244, 63, 94, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(225, 29, 72, 0);
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0);
   }
 }
 

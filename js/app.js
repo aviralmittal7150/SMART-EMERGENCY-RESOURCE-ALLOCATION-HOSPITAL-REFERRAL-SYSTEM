@@ -387,7 +387,7 @@ function renderHospitalAcceptanceView() {
       </div>
     </div>
 
-    <div class="panel" style="margin-top: 1.5rem; background: rgba(0, 0, 0, 0.35);">
+    <div class="panel" style="margin-top: 1.5rem; background: var(--bg-surface-elevated); border: 1px solid var(--glass-border);">
       <div class="panel-header">
         <span class="panel-title">🚨 Patient Requirements & Clinical Triage</span>
         <span class="panel-badge">${request.requestId}</span>
