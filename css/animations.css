@@ -1,181 +1,56 @@
 /* ====================================================================
-   ANIMATIONS & KEYFRAMES — Apple Micro-Motion Language
-   Spring-based easing · Breathing pulses · Staggered reveals
+   ANIMATIONS & KEYFRAMES — Classy Light Medical Micro-Interactions
+   Spring-based easing · Clinical pulses · Staggered reveals
    ==================================================================== */
 
-/* ── Breathing Pulse — Live Indicator ── */
-@keyframes pulseBreath {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 1;
-    box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.6);
-  }
-  50% {
-    transform: scale(1.25);
-    opacity: 0.85;
-    box-shadow: 0 0 0 6px rgba(48, 209, 88, 0);
-  }
-}
-
-/* ── Apple Page Reveal — Smooth Fade + Subtle Rise ── */
-@keyframes appleReveal {
+@keyframes pulse-green {
   0% {
-    opacity: 0;
-    transform: translateY(8px);
-    filter: blur(2px);
+    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(5, 150, 105, 0);
   }
   100% {
-    opacity: 1;
-    transform: translateY(0);
-    filter: blur(0);
+    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
   }
 }
 
-/* ── Card Stagger Entrance ── */
-@keyframes cardSlideUp {
+@keyframes pulse-red {
   0% {
-    opacity: 0;
-    transform: translateY(16px) scale(0.98);
+    box-shadow: 0 0 0 0 rgba(225, 29, 72, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(225, 29, 72, 0);
   }
   100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 0 rgba(225, 29, 72, 0);
   }
 }
 
-/* ── Soft Lock Timer Pulse ── */
-@keyframes lockPulse {
-  0%, 100% {
-    border-color: rgba(255, 214, 10, 0.2);
-    box-shadow: 0 0 12px rgba(255, 214, 10, 0.1);
-  }
-  50% {
-    border-color: rgba(255, 214, 10, 0.5);
-    box-shadow: 0 0 35px rgba(255, 214, 10, 0.2), inset 0 0 20px rgba(255, 214, 10, 0.03);
-  }
-}
-
-.anim-lock-pulse {
-  animation: lockPulse 2s ease-in-out infinite;
-}
-
-/* ── Urgent Alert Flash ── */
-@keyframes urgentFlash {
-  0%, 100% {
-    background-color: rgba(255, 69, 58, 0.06);
-  }
-  50% {
-    background-color: rgba(255, 69, 58, 0.15);
-  }
-}
-
-.anim-urgent {
-  animation: urgentFlash 1.2s ease-in-out infinite;
-}
-
-/* ── Shimmer Loading Effect ── */
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
-.anim-shimmer {
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0) 0%,
-    rgba(255, 255, 255, 0.04) 50%,
-    rgba(255, 255, 255, 0) 100%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 2.5s ease infinite;
-}
-
-/* ── Glow Pulse — For Active Elements ── */
-@keyframes glowPulse {
-  0%, 100% {
-    box-shadow: 0 0 10px rgba(10, 132, 255, 0.2);
-  }
-  50% {
-    box-shadow: 0 0 25px rgba(10, 132, 255, 0.4), 0 0 60px rgba(10, 132, 255, 0.1);
-  }
-}
-
-/* ── Subtle Float — For Hero Elements ── */
-@keyframes subtleFloat {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-4px);
-  }
-}
-
-/* ── Notification Slide-In ── */
-@keyframes notifSlideIn {
-  0% {
-    opacity: 0;
-    transform: translateX(30px) scale(0.95);
-  }
-  100% {
-    opacity: 1;
-    transform: translateX(0) scale(1);
-  }
-}
-
-/* ── Spin — For Loading Indicators ── */
-@keyframes spin {
+@keyframes slideInUp {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
+    transform: translateY(12px);
   }
   to {
-    transform: rotate(360deg);
-  }
-}
-
-/* ── Scale Pop — For Buttons & Interactive Elements ── */
-@keyframes scalePop {
-  0% {
-    transform: scale(0.9);
-    opacity: 0;
-  }
-  60% {
-    transform: scale(1.03);
-  }
-  100% {
-    transform: scale(1);
     opacity: 1;
+    transform: translateY(0);
   }
 }
 
-/* ── Utility Animation Classes ── */
-.anim-card-enter {
-  animation: cardSlideUp 0.5s var(--ease-out-expo) forwards;
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-.anim-glow {
-  animation: glowPulse 3s ease-in-out infinite;
+.animate-slide-up {
+  animation: slideInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.anim-float {
-  animation: subtleFloat 4s ease-in-out infinite;
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
 }
 
-.anim-notif {
-  animation: notifSlideIn 0.4s var(--ease-spring);
+.pulse-emergency {
+  animation: pulse-red 1.5s infinite;
 }
-
-.anim-scale-pop {
-  animation: scalePop 0.35s var(--ease-spring);
-}
-
-/* ── Stagger Delays for Card Lists ── */
-.stagger-1 { animation-delay: 0.05s; }
-.stagger-2 { animation-delay: 0.1s; }
-.stagger-3 { animation-delay: 0.15s; }
-.stagger-4 { animation-delay: 0.2s; }
-.stagger-5 { animation-delay: 0.25s; }
-.stagger-6 { animation-delay: 0.3s; }

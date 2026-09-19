@@ -1,356 +1,140 @@
 /* ====================================================================
-   APPLE-INSPIRED PREMIUM DESIGN SYSTEM
+   CLASSY PREMIUM LIGHT MEDICAL DESIGN SYSTEM
    Smart Emergency Resource Allocation & Hospital Referral System
-   Design Language: Frosted Glass · Inter Typography · Luminous Depth
+   Design Language: Pristine Clinical Slate · Frosted Medical Glass · Medical Cyan & Emerald Accents
    ==================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap');
 
 :root {
-  /* ── Apple Dark Palette ── */
-  --bg-base: #000000;
-  --bg-primary: #0a0a0a;
-  --bg-secondary: #1c1c1e;
-  --bg-tertiary: #2c2c2e;
-  --bg-elevated: #3a3a3c;
-
-  /* Frosted Glass */
-  --glass-bg: rgba(28, 28, 30, 0.72);
-  --glass-bg-heavy: rgba(28, 28, 30, 0.88);
-  --glass-bg-light: rgba(44, 44, 46, 0.55);
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-border-hover: rgba(255, 255, 255, 0.15);
-
-  /* Text Hierarchy */
-  --text-primary: #f5f5f7;
-  --text-secondary: rgba(245, 245, 247, 0.6);
-  --text-tertiary: rgba(245, 245, 247, 0.35);
-  --text-inverse: #1d1d1f;
-
-  /* Apple Accent System */
-  --accent-blue: #0a84ff;
-  --accent-blue-soft: rgba(10, 132, 255, 0.18);
-  --accent-blue-glow: rgba(10, 132, 255, 0.35);
-  --accent-indigo: #5e5ce6;
-  --accent-indigo-soft: rgba(94, 92, 230, 0.18);
-  --accent-purple: #bf5af2;
-  --accent-purple-soft: rgba(191, 90, 242, 0.15);
-  --accent-pink: #ff375f;
-  --accent-teal: #64d2ff;
-
-  /* Semantic Status */
-  --status-green: #30d158;
-  --status-green-soft: rgba(48, 209, 88, 0.15);
-  --status-green-glow: rgba(48, 209, 88, 0.3);
-  --status-yellow: #ffd60a;
-  --status-yellow-soft: rgba(255, 214, 10, 0.15);
-  --status-yellow-glow: rgba(255, 214, 10, 0.3);
-  --status-orange: #ff9f0a;
-  --status-orange-soft: rgba(255, 159, 10, 0.15);
-  --status-red: #ff453a;
-  --status-red-soft: rgba(255, 69, 58, 0.15);
-  --status-red-glow: rgba(255, 69, 58, 0.3);
-
-  /* Typography */
-  --font-main: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
-
-  /* Shadows & Depth */
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.7), 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-xl: 0 24px 60px rgba(0, 0, 0, 0.8);
-  --shadow-glow-blue: 0 0 30px rgba(10, 132, 255, 0.2), 0 0 60px rgba(10, 132, 255, 0.08);
-  --shadow-glow-green: 0 0 20px rgba(48, 209, 88, 0.2);
-
+  /* Pristine Light Palette */
+  --bg-base: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #ffffff;
+  --bg-glass: rgba(255, 255, 255, 0.82);
+  --bg-glass-card: rgba(255, 255, 255, 0.9);
+  --bg-pill: #f1f5f9;
+  
+  /* Borders & Dividers */
+  --glass-border: rgba(226, 232, 240, 0.85);
+  --glass-border-hover: rgba(186, 230, 253, 0.9);
+  --border-subtle: #e2e8f0;
+  
+  /* High-Contrast Clinical Typography */
+  --text-primary: #0f172a;    /* Slate 900 */
+  --text-secondary: #334155;  /* Slate 700 */
+  --text-tertiary: #64748b;   /* Slate 500 */
+  --text-muted: #94a3b8;      /* Slate 400 */
+  
+  /* Premium Medical Color Palette */
+  --accent-cyan: #0284c7;        /* Medical Cyan Primary */
+  --accent-cyan-light: rgba(2, 132, 199, 0.08);
+  --accent-cyan-glow: rgba(2, 132, 199, 0.2);
+  --accent-blue: #2563eb;        /* Clinical Cobalt */
+  --accent-teal: #0d9488;        /* Hospital Teal */
+  --accent-indigo: #4f46e5;      /* Deep Clinical Indigo */
+  
+  /* Severity & Status Indicator Tints */
+  --status-red: #e11d48;         /* Resuscitation / Level 1 */
+  --status-red-bg: #fff1f2;
+  --status-red-border: #fecdd3;
+  
+  --status-amber: #d97706;       /* Emergency / Level 2 */
+  --status-amber-bg: #fffbeb;
+  --status-amber-border: #fef3c7;
+  
+  --status-green: #059669;       /* Stable / Capacity Available */
+  --status-green-bg: #ecfdf5;
+  --status-green-border: #a7f3d0;
+  
+  --status-blue: #0284c7;        /* In Transport / Active */
+  --status-blue-bg: #f0f9ff;
+  --status-blue-border: #bae6fd;
+  
+  /* Elevation & Medical Depth Shadows */
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.02);
+  --shadow-md: 0 4px 16px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.03);
+  --shadow-lg: 0 12px 32px -4px rgba(15, 23, 42, 0.08), 0 4px 12px -2px rgba(2, 132, 199, 0.06);
+  --shadow-hover: 0 20px 40px -6px rgba(15, 23, 42, 0.1), 0 8px 16px -4px rgba(2, 132, 199, 0.1);
+  --shadow-glow: 0 0 24px rgba(2, 132, 199, 0.18);
+  
   /* Radii */
-  --radius-xs: 6px;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-2xl: 24px;
-  --radius-full: 9999px;
-
-  /* Motion */
-  --ease-apple: cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
-  --duration-fast: 0.18s;
-  --duration-normal: 0.3s;
-  --duration-slow: 0.5s;
+  --radius-xl: 24px;
+  --radius-pill: 9999px;
+  
+  /* Transitions */
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-fast: 0.18s var(--ease-spring);
+  --transition-normal: 0.28s var(--ease-spring);
 }
 
-/* ── Reset & Base ── */
-*,
-*::before,
-*::after {
+/* Base Body Setup */
+*, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-html {
-  font-size: 16px;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-}
-
 body {
-  font-family: var(--font-main);
+  font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background-color: var(--bg-base);
   color: var(--text-primary);
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
-  overflow-x: hidden;
-  letter-spacing: -0.01em;
-  /* Ambient lighting — subtle mesh gradient */
-  background-image:
-    radial-gradient(ellipse 80% 60% at 20% 10%, rgba(10, 132, 255, 0.06) 0%, transparent 50%),
-    radial-gradient(ellipse 60% 50% at 80% 90%, rgba(191, 90, 242, 0.05) 0%, transparent 50%),
-    radial-gradient(ellipse 50% 40% at 50% 50%, rgba(48, 209, 88, 0.025) 0%, transparent 60%);
-  background-attachment: fixed;
-}
-
-/* ── Scrollbar — Apple Ultra-Thin ── */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-full);
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
-}
-
-/* ── App Container ── */
-.app-container {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-}
-
-/* ═══════════════════════════════════════════════
-   TOP NAVIGATION BAR — Apple Frosted Glass Bar
-   ═══════════════════════════════════════════════ */
-.top-navbar {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  background: rgba(0, 0, 0, 0.72);
-  border-bottom: 1px solid var(--glass-border);
-  padding: 0.65rem 1.5rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-}
-
-.brand-section {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-shrink: 0;
-}
-
-.brand-icon {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, var(--accent-blue), var(--accent-indigo));
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.15rem;
-  box-shadow: 0 2px 12px rgba(10, 132, 255, 0.35);
-}
-
-.brand-title h1 {
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  color: var(--text-primary);
-}
-
-.brand-title p {
-  font-size: 0.68rem;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  letter-spacing: 0.02em;
-  font-weight: 500;
-}
-
-/* ── Navigation Tabs — Apple Segmented Control ── */
-.nav-tabs {
-  display: flex;
-  gap: 2px;
-  background: rgba(118, 118, 128, 0.12);
-  padding: 3px;
-  border-radius: var(--radius-md);
-  flex-shrink: 0;
-}
-
-.nav-tab-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  padding: 0.4rem 0.85rem;
-  border-radius: calc(var(--radius-md) - 2px);
-  font-family: var(--font-main);
-  font-size: 0.78rem;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  transition: all var(--duration-normal) var(--ease-apple);
-  white-space: nowrap;
   position: relative;
+  overflow-x: hidden;
 }
 
-.nav-tab-btn:hover {
-  color: var(--text-primary);
+/* Subtle Medical Background Mesh */
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: 
+    radial-gradient(circle at 10% 10%, rgba(2, 132, 199, 0.04) 0%, transparent 40%),
+    radial-gradient(circle at 90% 80%, rgba(13, 148, 136, 0.04) 0%, transparent 45%),
+    radial-gradient(circle at 50% 50%, rgba(37, 99, 235, 0.02) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
 }
 
-.nav-tab-btn.active {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.12);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
-}
-
-.nav-tab-btn span {
-  font-size: 0.9rem;
-}
-
-/* ── System Clock & Status ── */
-.top-meta {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-shrink: 0;
-}
-
-.system-clock {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  font-weight: 500;
-  color: var(--accent-teal);
-  background: rgba(100, 210, 255, 0.08);
-  padding: 0.3rem 0.7rem;
-  border-radius: var(--radius-full);
-  border: 1px solid rgba(100, 210, 255, 0.12);
-}
-
-.live-indicator {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--status-green);
-}
-
-.pulse-dot {
-  width: 7px;
-  height: 7px;
-  background-color: var(--status-green);
-  border-radius: 50%;
-  box-shadow: 0 0 6px var(--status-green);
-  animation: pulseBreath 2s ease-in-out infinite;
-}
-
-/* ═══════════════════════════════════════
-   MAIN CONTENT AREA
-   ═══════════════════════════════════════ */
-.main-content {
-  flex: 1;
-  padding: 1.25rem 1.5rem;
-  max-width: 1500px;
+/* Layout Container */
+.app-container {
+  max-width: 1360px;
   margin: 0 auto;
-  width: 100%;
+  padding: 1.5rem 2rem 4rem 2rem;
 }
 
-.tab-pane {
-  display: none;
+/* Typography Hierarchy */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--text-primary);
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
-.tab-pane.active {
-  display: block;
-  animation: appleReveal 0.4s var(--ease-out-expo);
-}
+h1 { font-size: 1.85rem; line-height: 1.25; }
+h2 { font-size: 1.45rem; line-height: 1.3; }
+h3 { font-size: 1.15rem; line-height: 1.35; }
+h4 { font-size: 1rem; font-weight: 600; }
 
-/* ═══════════════════════════════════════
-   FOOTER — Minimal Apple Footer
-   ═══════════════════════════════════════ */
-.app-footer {
-  border-top: 1px solid var(--glass-border);
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  padding: 0.85rem 1.5rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-}
-
-.footer-links {
-  display: flex;
-  gap: 1.25rem;
-}
-
-.footer-links a {
+p {
   color: var(--text-secondary);
-  text-decoration: none;
-  transition: color var(--duration-fast) var(--ease-apple);
-  font-weight: 500;
+  font-size: 0.925rem;
 }
 
-.footer-links a:hover {
-  color: var(--accent-blue);
-}
-
-/* ═══════════════════════════════════════
-   RESPONSIVE BREAKPOINTS
-   ═══════════════════════════════════════ */
-@media (max-width: 1200px) {
-  .top-navbar {
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  .nav-tabs {
-    order: 3;
-    width: 100%;
-    overflow-x: auto;
-    justify-content: flex-start;
-  }
-}
-
-@media (max-width: 768px) {
-  .main-content {
-    padding: 1rem;
-  }
-
-  .top-navbar {
-    padding: 0.5rem 1rem;
-  }
-
-  .brand-title h1 {
-    font-size: 0.9rem;
-  }
-}
+/* Utility Classes */
+.text-cyan { color: var(--accent-cyan); }
+.text-teal { color: var(--accent-teal); }
+.text-blue { color: var(--accent-blue); }
+.text-red { color: var(--status-red); }
+.text-amber { color: var(--status-amber); }
+.text-green { color: var(--status-green); }
+.text-muted { color: var(--text-tertiary); }
