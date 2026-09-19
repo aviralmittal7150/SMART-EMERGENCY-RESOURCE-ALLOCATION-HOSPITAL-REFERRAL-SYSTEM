@@ -1,71 +1,85 @@
 /* ====================================================================
-   CLASSY PREMIUM LIGHT MEDICAL DESIGN SYSTEM
+   HIGH-END SAAS DESIGN SYSTEM — Linear / Vercel / Apple Inspired
    Smart Emergency Resource Allocation & Hospital Referral System
-   Design Language: Pristine Clinical Slate · Frosted Medical Glass · Medical Cyan & Emerald Accents
+   Design Tokens · Pristine Spacing · Obsidian Depth · High-Contrast Typography
    ==================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
-  /* Pristine Light Palette */
-  --bg-base: #f8fafc;
-  --bg-surface: #ffffff;
-  --bg-surface-elevated: #ffffff;
-  --bg-glass: rgba(255, 255, 255, 0.82);
-  --bg-glass-card: rgba(255, 255, 255, 0.9);
-  --bg-pill: #f1f5f9;
+  /* High-End Obsidian Palette */
+  --bg-dark: #090d16;
+  --bg-surface: #111827;
+  --bg-surface-elevated: #1e293b;
+  --bg-surface-hover: #1e293b;
+  --bg-glass: rgba(17, 24, 39, 0.82);
+  --bg-glass-card: rgba(17, 24, 39, 0.9);
+  --bg-pill: rgba(255, 255, 255, 0.05);
   
   /* Borders & Dividers */
-  --glass-border: rgba(226, 232, 240, 0.85);
-  --glass-border-hover: rgba(186, 230, 253, 0.9);
-  --border-subtle: #e2e8f0;
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(56, 189, 248, 0.35);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.14);
   
-  /* High-Contrast Clinical Typography */
-  --text-primary: #0f172a;    /* Slate 900 */
-  --text-secondary: #334155;  /* Slate 700 */
-  --text-tertiary: #64748b;   /* Slate 500 */
-  --text-muted: #94a3b8;      /* Slate 400 */
+  /* High-Contrast SaaS Typography */
+  --text-primary: #f8fafc;     /* Slate 50 */
+  --text-secondary: #cbd5e1;   /* Slate 300 */
+  --text-tertiary: #94a3b8;    /* Slate 400 */
+  --text-muted: #64748b;       /* Slate 500 */
   
-  /* Premium Medical Color Palette */
-  --accent-cyan: #0284c7;        /* Medical Cyan Primary */
-  --accent-cyan-light: rgba(2, 132, 199, 0.08);
-  --accent-cyan-glow: rgba(2, 132, 199, 0.2);
-  --accent-blue: #2563eb;        /* Clinical Cobalt */
-  --accent-teal: #0d9488;        /* Hospital Teal */
-  --accent-indigo: #4f46e5;      /* Deep Clinical Indigo */
+  /* Premium Primary Accents */
+  --accent-cyan: #38bdf8;         /* Linear Sky Blue */
+  --accent-cyan-light: rgba(56, 189, 248, 0.12);
+  --accent-cyan-glow: rgba(56, 189, 248, 0.25);
+  --accent-blue: #3b82f6;         /* Vercel Cobalt */
+  --accent-indigo: #6366f1;       /* Linear Indigo */
+  --accent-teal: #14b8a6;         /* Emerald Teal */
   
-  /* Severity & Status Indicator Tints */
-  --status-red: #e11d48;         /* Resuscitation / Level 1 */
-  --status-red-bg: #fff1f2;
-  --status-red-border: #fecdd3;
+  /* Status Indicators */
+  --status-red: #f43f5e;          /* Level 1 Resuscitation */
+  --status-red-bg: rgba(244, 63, 94, 0.12);
+  --status-red-border: rgba(244, 63, 94, 0.3);
   
-  --status-amber: #d97706;       /* Emergency / Level 2 */
-  --status-amber-bg: #fffbeb;
-  --status-amber-border: #fef3c7;
+  --status-amber: #f59e0b;        /* Level 2 Emergent */
+  --status-amber-bg: rgba(245, 158, 11, 0.12);
+  --status-amber-border: rgba(245, 158, 11, 0.3);
   
-  --status-green: #059669;       /* Stable / Capacity Available */
-  --status-green-bg: #ecfdf5;
-  --status-green-border: #a7f3d0;
+  --status-green: #10b981;        /* Capacity Available / Open */
+  --status-green-bg: rgba(16, 185, 129, 0.12);
+  --status-green-border: rgba(16, 185, 129, 0.3);
   
-  --status-blue: #0284c7;        /* In Transport / Active */
-  --status-blue-bg: #f0f9ff;
-  --status-blue-border: #bae6fd;
+  --status-blue: #38bdf8;         /* Active Transport */
+  --status-blue-bg: rgba(56, 189, 248, 0.12);
+  --status-blue-border: rgba(56, 189, 248, 0.3);
   
-  /* Elevation & Medical Depth Shadows */
-  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.02);
-  --shadow-md: 0 4px 16px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.03);
-  --shadow-lg: 0 12px 32px -4px rgba(15, 23, 42, 0.08), 0 4px 12px -2px rgba(2, 132, 199, 0.06);
-  --shadow-hover: 0 20px 40px -6px rgba(15, 23, 42, 0.1), 0 8px 16px -4px rgba(2, 132, 199, 0.1);
-  --shadow-glow: 0 0 24px rgba(2, 132, 199, 0.18);
-  
-  /* Radii */
+  /* Radii System */
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 24px;
   --radius-pill: 9999px;
   
-  /* Transitions */
+  /* Spacing Tokens (8px Grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  
+  /* Shadows & Depth Elevation */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6), 0 0 20px rgba(56, 189, 248, 0.12);
+  --shadow-glow: 0 0 30px rgba(56, 189, 248, 0.25);
+  
+  /* Font Families */
+  --font-sans: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  
+  /* Easing */
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
   --transition-fast: 0.18s var(--ease-spring);
   --transition-normal: 0.28s var(--ease-spring);
@@ -79,8 +93,8 @@
 }
 
 body {
-  font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background-color: var(--bg-base);
+  font-family: var(--font-sans);
+  background-color: var(--bg-dark);
   color: var(--text-primary);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -90,7 +104,7 @@ body {
   overflow-x: hidden;
 }
 
-/* Subtle Medical Background Mesh */
+/* Subtle Linear-Inspired Background Ambient Glow */
 body::before {
   content: "";
   position: fixed;
@@ -99,16 +113,16 @@ body::before {
   width: 100vw;
   height: 100vh;
   background: 
-    radial-gradient(circle at 10% 10%, rgba(2, 132, 199, 0.04) 0%, transparent 40%),
-    radial-gradient(circle at 90% 80%, rgba(13, 148, 136, 0.04) 0%, transparent 45%),
-    radial-gradient(circle at 50% 50%, rgba(37, 99, 235, 0.02) 0%, transparent 50%);
+    radial-gradient(circle at 50% 0%, rgba(56, 189, 248, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 10% 30%, rgba(99, 102, 241, 0.05) 0%, transparent 45%),
+    radial-gradient(circle at 90% 80%, rgba(20, 184, 166, 0.05) 0%, transparent 50%);
   pointer-events: none;
   z-index: -1;
 }
 
-/* Layout Container */
+/* App Layout Container */
 .app-container {
-  max-width: 1360px;
+  max-width: 1380px;
   margin: 0 auto;
   padding: 1.5rem 2rem 4rem 2rem;
 }
@@ -117,24 +131,26 @@ body::before {
 h1, h2, h3, h4, h5, h6 {
   color: var(--text-primary);
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
 }
 
-h1 { font-size: 1.85rem; line-height: 1.25; }
-h2 { font-size: 1.45rem; line-height: 1.3; }
-h3 { font-size: 1.15rem; line-height: 1.35; }
-h4 { font-size: 1rem; font-weight: 600; }
+h1 { font-size: 1.85rem; line-height: 1.2; font-weight: 800; }
+h2 { font-size: 1.45rem; line-height: 1.25; }
+h3 { font-size: 1.15rem; line-height: 1.3; }
+h4 { font-size: 0.95rem; font-weight: 600; }
 
 p {
   color: var(--text-secondary);
   font-size: 0.925rem;
 }
 
-/* Utility Classes */
+/* Utility Helpers */
 .text-cyan { color: var(--accent-cyan); }
-.text-teal { color: var(--accent-teal); }
+.text-indigo { color: var(--accent-indigo); }
 .text-blue { color: var(--accent-blue); }
 .text-red { color: var(--status-red); }
 .text-amber { color: var(--status-amber); }
 .text-green { color: var(--status-green); }
-.text-muted { color: var(--text-tertiary); }
+.text-muted { color: var(--text-muted); }
+
+.font-mono { font-family: var(--font-mono); }

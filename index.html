@@ -6,9 +6,9 @@
   <title>Smart Emergency Resource Allocation & Hospital Referral System</title>
   <meta name="description" content="Intelligent real-time emergency resource allocation engine using OS scheduling, mutual exclusion, and DBMS transactions to route patients to the most suitable hospital.">
   <meta name="author" content="Aviral Mittal">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#090d16">
 
-  <!-- Apple-Inspired Design System -->
+  <!-- Plus Jakarta Sans & Inter Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="css/main.css">
@@ -19,7 +19,7 @@
 </head>
 <body>
   <!-- Global Toast Notification Banner -->
-  <div id="globalNotificationBanner" style="display: none; position: fixed; top: 70px; right: 20px; z-index: 999; color: #fff; padding: 0.85rem 1.25rem; border-radius: var(--radius-md); font-weight: 600; font-size: 0.85rem; box-shadow: var(--shadow-lg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);"></div>
+  <div id="globalNotificationBanner" style="display: none; position: fixed; top: 75px; right: 24px; z-index: 999; color: #fff; padding: 0.9rem 1.35rem; border-radius: var(--radius-md); font-weight: 600; font-size: 0.875rem; box-shadow: var(--shadow-lg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);"></div>
 
   <div class="app-container">
     <!-- ═══════════ TOP NAVIGATION BAR ═══════════ -->
@@ -32,7 +32,7 @@
         </div>
       </div>
 
-      <!-- Apple Segmented Navigation -->
+      <!-- Linear Segmented Navigation -->
       <nav class="nav-tabs" aria-label="Main navigation">
         <button class="nav-tab-btn active" data-tab="tab-ingestion" id="nav-emergency">
           <span>🚨</span> Emergency Intake
@@ -70,9 +70,9 @@
       <!-- TAB 1: Emergency Ingestion & Priority Triage -->
       <section id="tab-ingestion" class="tab-pane active">
         <!-- OS Process Lifecycle Progress -->
-        <div class="panel" style="padding: 1rem 1.5rem; margin-bottom: 1.25rem;">
-          <div style="font-size: 0.7rem; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.25rem;">
-            OS Process State Lifecycle
+        <div class="panel" style="padding: 1rem 1.5rem; margin-bottom: 1.5rem;">
+          <div style="font-size: 0.725rem; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.4rem;">
+            OS Process State Lifecycle Tracker
           </div>
           <div class="state-tracker">
             <div class="state-step active">1<span class="state-label">NEW</span></div>
@@ -140,7 +140,7 @@
                     <span class="triage-level-desc">Non-Urgent</span>
                   </div>
                 </div>
-                <div id="triageRecommendationInfo" style="background: rgba(0, 0, 0, 0.3); padding: 0.55rem 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--glass-border);">
+                <div id="triageRecommendationInfo" style="background: rgba(255, 255, 255, 0.04); padding: 0.65rem 0.9rem; border-radius: var(--radius-md); border: 1px solid var(--glass-border);">
                   <!-- Populated dynamically by JS -->
                 </div>
               </div>
@@ -177,7 +177,7 @@
             </div>
 
             <div style="overflow-x: auto;">
-              <table class="matrix-table" style="text-align: left; font-size: 0.78rem;">
+              <table class="matrix-table">
                 <thead>
                   <tr>
                     <th>ID</th>
@@ -195,7 +195,7 @@
               </table>
             </div>
 
-            <div style="margin-top: 1.15rem; font-size: 0.75rem; color: var(--text-tertiary); background: rgba(10, 132, 255, 0.05); padding: 0.7rem 0.85rem; border-radius: var(--radius-sm); border: 1px solid rgba(10, 132, 255, 0.1);">
+            <div style="margin-top: 1.15rem; font-size: 0.78rem; color: var(--text-tertiary); background: rgba(56, 189, 248, 0.06); padding: 0.75rem 1rem; border-radius: var(--radius-md); border: 1px solid rgba(56, 189, 248, 0.15);">
               ℹ️ <strong style="color: var(--text-secondary);">OS Priority Scheduling:</strong> Cases with higher triage severity (P1 > P2 > P3) automatically preempt in hospital ranking evaluation to minimize critical mortality latency.
             </div>
           </div>
@@ -208,7 +208,7 @@
           <div class="panel-header">
             <div>
               <span class="panel-title">🎯 Smart Hospital Suitability Ranking</span>
-              <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.2rem; font-weight: 400;">
+              <div style="font-size: 0.78rem; color: var(--text-tertiary); margin-top: 0.25rem; font-weight: 500;">
                 "Not just the nearest hospital — the nearest suitable hospital that can actually handle the emergency."
               </div>
             </div>
@@ -239,7 +239,7 @@
       <section id="tab-command" class="tab-pane">
         <!-- KPI Row -->
         <div class="kpi-grid">
-          <div class="kpi-card purple">
+          <div class="kpi-card">
             <div class="kpi-header">
               <span class="kpi-title">Active Emergencies</span>
               <span class="kpi-icon">🚨</span>
@@ -248,7 +248,7 @@
             <div class="kpi-subtext">Currently monitored</div>
           </div>
 
-          <div class="kpi-card red">
+          <div class="kpi-card">
             <div class="kpi-header">
               <span class="kpi-title">Critical P1 Cases</span>
               <span class="kpi-icon">⚡</span>
@@ -257,7 +257,7 @@
             <div class="kpi-subtext">Awaiting allocation</div>
           </div>
 
-          <div class="kpi-card green">
+          <div class="kpi-card">
             <div class="kpi-header">
               <span class="kpi-title">Available ICU Beds</span>
               <span class="kpi-icon">🛏️</span>
@@ -266,7 +266,7 @@
             <div class="kpi-subtext">Across network</div>
           </div>
 
-          <div class="kpi-card green">
+          <div class="kpi-card">
             <div class="kpi-header">
               <span class="kpi-title">Open Ventilators</span>
               <span class="kpi-icon">🫁</span>
@@ -275,7 +275,7 @@
             <div class="kpi-subtext">Across network</div>
           </div>
 
-          <div class="kpi-card yellow">
+          <div class="kpi-card">
             <div class="kpi-header">
               <span class="kpi-title">Hospitals Open</span>
               <span class="kpi-icon">🏥</span>
@@ -284,7 +284,7 @@
             <div class="kpi-subtext">1 Diverting/Closed</div>
           </div>
 
-          <div class="kpi-card purple">
+          <div class="kpi-card">
             <div class="kpi-header">
               <span class="kpi-title">EMS Ambulances</span>
               <span class="kpi-icon">🚑</span>
@@ -312,7 +312,7 @@
           <div class="panel-header">
             <div>
               <span class="panel-title">🧠 Banker's Algorithm Safe-State Simulator</span>
-              <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.2rem;">
+              <div style="font-size: 0.78rem; color: var(--text-tertiary); margin-top: 0.25rem;">
                 Academic Demonstration · Deadlock Avoidance for Compound Resource Requests
               </div>
             </div>
@@ -322,16 +322,16 @@
           <!-- Vectors & Matrix -->
           <div class="grid-2col">
             <div>
-              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--accent-blue); font-weight: 700;">
+              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--accent-cyan); font-weight: 700;">
                 1. System Available Resources [ICU, Vent, Specialist]
               </h4>
               <div style="display: flex; gap: 1rem; margin-bottom: 1.15rem;">
-                <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">ICU Beds</label> <input id="avail0" type="number" value="3" style="width:50px;" class="form-input"></div>
-                <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Ventilators</label> <input id="avail1" type="number" value="3" style="width:50px;" class="form-input"></div>
-                <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Specialists</label> <input id="avail2" type="number" value="2" style="width:50px;" class="form-input"></div>
+                <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">ICU Beds</label> <input id="avail0" type="number" value="3" style="width:60px;" class="form-input"></div>
+                <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Ventilators</label> <input id="avail1" type="number" value="3" style="width:60px;" class="form-input"></div>
+                <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Specialists</label> <input id="avail2" type="number" value="2" style="width:60px;" class="form-input"></div>
               </div>
 
-              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--status-yellow); font-weight: 700;">
+              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--status-amber); font-weight: 700;">
                 2. Allocation & Maximum Claims Matrix
               </h4>
               <table class="matrix-table">
@@ -346,53 +346,53 @@
                   <tr>
                     <td>P0 (Cardiac)</td>
                     <td>
-                      <input id="alloc_0_0" type="number" value="0">
-                      <input id="alloc_0_1" type="number" value="1">
-                      <input id="alloc_0_2" type="number" value="0">
+                      <input id="alloc_0_0" type="number" value="0" style="width:40px;" class="form-input">
+                      <input id="alloc_0_1" type="number" value="1" style="width:40px;" class="form-input">
+                      <input id="alloc_0_2" type="number" value="0" style="width:40px;" class="form-input">
                     </td>
                     <td>
-                      <input id="max_0_0" type="number" value="7">
-                      <input id="max_0_1" type="number" value="5">
-                      <input id="max_0_2" type="number" value="3">
+                      <input id="max_0_0" type="number" value="7" style="width:40px;" class="form-input">
+                      <input id="max_0_1" type="number" value="5" style="width:40px;" class="form-input">
+                      <input id="max_0_2" type="number" value="3" style="width:40px;" class="form-input">
                     </td>
                   </tr>
                   <tr>
                     <td>P1 (Polytrauma)</td>
                     <td>
-                      <input id="alloc_1_0" type="number" value="2">
-                      <input id="alloc_1_1" type="number" value="0">
-                      <input id="alloc_1_2" type="number" value="0">
+                      <input id="alloc_1_0" type="number" value="2" style="width:40px;" class="form-input">
+                      <input id="alloc_1_1" type="number" value="0" style="width:40px;" class="form-input">
+                      <input id="alloc_1_2" type="number" value="0" style="width:40px;" class="form-input">
                     </td>
                     <td>
-                      <input id="max_1_0" type="number" value="3">
-                      <input id="max_1_1" type="number" value="2">
-                      <input id="max_1_2" type="number" value="2">
+                      <input id="max_1_0" type="number" value="3" style="width:40px;" class="form-input">
+                      <input id="max_1_1" type="number" value="2" style="width:40px;" class="form-input">
+                      <input id="max_1_2" type="number" value="2" style="width:40px;" class="form-input">
                     </td>
                   </tr>
                   <tr>
                     <td>P2 (Stroke)</td>
                     <td>
-                      <input id="alloc_2_0" type="number" value="3">
-                      <input id="alloc_2_1" type="number" value="0">
-                      <input id="alloc_2_2" type="number" value="2">
+                      <input id="alloc_2_0" type="number" value="3" style="width:40px;" class="form-input">
+                      <input id="alloc_2_1" type="number" value="0" style="width:40px;" class="form-input">
+                      <input id="alloc_2_2" type="number" value="2" style="width:40px;" class="form-input">
                     </td>
                     <td>
-                      <input id="max_2_0" type="number" value="9">
-                      <input id="max_2_1" type="number" value="0">
-                      <input id="max_2_2" type="number" value="2">
+                      <input id="max_2_0" type="number" value="9" style="width:40px;" class="form-input">
+                      <input id="max_2_1" type="number" value="0" style="width:40px;" class="form-input">
+                      <input id="max_2_2" type="number" value="2" style="width:40px;" class="form-input">
                     </td>
                   </tr>
                   <tr>
                     <td>P3 (Respiratory)</td>
                     <td>
-                      <input id="alloc_3_0" type="number" value="2">
-                      <input id="alloc_3_1" type="number" value="1">
-                      <input id="alloc_3_2" type="number" value="1">
+                      <input id="alloc_3_0" type="number" value="2" style="width:40px;" class="form-input">
+                      <input id="alloc_3_1" type="number" value="1" style="width:40px;" class="form-input">
+                      <input id="alloc_3_2" type="number" value="1" style="width:40px;" class="form-input">
                     </td>
                     <td>
-                      <input id="max_3_0" type="number" value="2">
-                      <input id="max_3_1" type="number" value="2">
-                      <input id="max_3_2" type="number" value="2">
+                      <input id="max_3_0" type="number" value="2" style="width:40px;" class="form-input">
+                      <input id="max_3_1" type="number" value="2" style="width:40px;" class="form-input">
+                      <input id="max_3_2" type="number" value="2" style="width:40px;" class="form-input">
                     </td>
                   </tr>
                 </tbody>
