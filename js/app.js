@@ -246,10 +246,10 @@ function renderRankingResults() {
 
   container.innerHTML = `
     <div style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;">
-      <div style="font-size: 0.85rem; color: var(--text-secondary);">
+      <div style="font-size: 0.82rem; color: var(--text-secondary);">
         Scoring Model: <strong>Resource Fit (40%) + Acceptance (25%) + Capacity (20%) + Distance (15%)</strong>
       </div>
-      <div style="font-size: 0.8rem; font-family: var(--font-mono); color: var(--status-blue);">
+      <div style="font-size: 0.78rem; font-family: var(--font-mono); color: var(--accent-blue);">
         ${ranked.filter(h => h.isEligible).length} Eligible Hospitals Matched
       </div>
     </div>
@@ -270,7 +270,7 @@ function renderRankingResults() {
             <span>${hospital.name}</span>
             <span class="badge-status ${statusBadgeClass}">${hospital.status}</span>
           </div>
-          <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem;">
+          <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.2rem;">
             📍 ${hospital.address} • <strong>${hospital.distanceKm} km away</strong> • ⭐ ${hospital.rating}/5.0
           </div>
         </div>
@@ -305,8 +305,8 @@ function renderRankingResults() {
       </div>
 
       ${hospital.isEligible ? `
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.75rem; border-top: 1px solid var(--border-color); padding-top: 0.75rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.75rem; border-top: 1px solid var(--glass-border); padding-top: 0.75rem;">
+          <div style="font-size: 0.72rem; color: var(--text-tertiary);">
             Match breakdown: Fit ${hospital.breakdown.resourceFit}% | Cap ${hospital.breakdown.capacity}% | Dist ${hospital.breakdown.distance}%
           </div>
           <button class="btn btn-primary btn-sm btn-init-referral" data-hospital-id="${hospital.id}">
@@ -314,7 +314,7 @@ function renderRankingResults() {
           </button>
         </div>
       ` : `
-        <div style="font-size: 0.75rem; color: var(--status-red); margin-top: 0.5rem; background: rgba(239, 68, 68, 0.1); padding: 0.4rem 0.6rem; border-radius: var(--radius-sm);">
+        <div style="font-size: 0.75rem; color: var(--status-red); margin-top: 0.5rem; background: var(--status-red-soft); padding: 0.4rem 0.6rem; border-radius: var(--radius-sm);">
           🚫 <strong>Hard Constraint Exclusion:</strong> ${hospital.exclusionReason}
         </div>
       `}
@@ -387,17 +387,17 @@ function renderHospitalAcceptanceView() {
       </div>
     </div>
 
-    <div class="panel" style="margin-top: 1.5rem; background: rgba(15, 23, 42, 0.9);">
+    <div class="panel" style="margin-top: 1.5rem; background: rgba(0, 0, 0, 0.35);">
       <div class="panel-header">
         <span class="panel-title">🚨 Patient Requirements & Clinical Triage</span>
         <span class="panel-badge">${request.requestId}</span>
       </div>
       
-      <div class="grid-2col" style="font-size: 0.88rem; margin-bottom: 1rem;">
+      <div class="grid-2col" style="font-size: 0.85rem; margin-bottom: 1rem;">
         <div>
           <div>👤 <strong>Patient:</strong> ${request.patientName} (Age: ${request.age})</div>
           <div>🩺 <strong>Condition:</strong> ${request.emergencyType}</div>
-          <div>⚠️ <strong>Triage Severity:</strong> <span style="color: var(--status-red); font-weight: 700;">${request.priorityName}</span></div>
+          <div>⚠️ <strong>Triage Severity:</strong> <span style="color: var(--status-red); font-weight: 700; font-family: var(--font-mono);">${request.priorityName}</span></div>
         </div>
         <div>
           <div>🏥 <strong>Target Facility:</strong> ${hospital.name}</div>
@@ -476,7 +476,7 @@ function renderHospitalsDirectory() {
       <div class="hospital-header">
         <div>
           <div class="hospital-name">${h.name}</div>
-          <div style="font-size: 0.75rem; color: var(--text-muted);">${h.address}</div>
+          <div style="font-size: 0.72rem; color: var(--text-tertiary);">${h.address}</div>
         </div>
         <span class="badge-status ${statusClass}">${h.status}</span>
       </div>
@@ -598,7 +598,7 @@ function renderAmbulanceFleet() {
       <div class="hospital-header">
         <div>
           <div class="hospital-name">🚑 ${amb.id}</div>
-          <div style="font-size: 0.78rem; color: var(--text-muted);">${amb.type} • Stationed at ${amb.hospitalId}</div>
+          <div style="font-size: 0.75rem; color: var(--text-tertiary);">${amb.type} • Stationed at ${amb.hospitalId}</div>
         </div>
         <span class="badge-status ${statusBadge}">${amb.status}</span>
       </div>
@@ -620,9 +620,15 @@ function showNotification(msg, type = "normal") {
 
   banner.textContent = msg;
   banner.style.display = "block";
-  banner.style.background = type === "urgent" ? "rgba(239, 68, 68, 0.9)" : type === "success" ? "rgba(16, 185, 129, 0.9)" : "rgba(56, 189, 248, 0.9)";
+  banner.className = "anim-notif";
+  banner.style.background = type === "urgent"
+    ? "rgba(255, 69, 58, 0.92)"
+    : type === "success"
+      ? "rgba(48, 209, 88, 0.92)"
+      : "rgba(10, 132, 255, 0.92)";
 
   setTimeout(() => {
     banner.style.display = "none";
+    banner.className = "";
   }, 6000);
 }
