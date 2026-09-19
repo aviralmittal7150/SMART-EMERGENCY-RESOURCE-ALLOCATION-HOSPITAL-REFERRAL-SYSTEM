@@ -4,52 +4,57 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Smart Emergency Resource Allocation & Hospital Referral System</title>
-  
-  <!-- Modern Fonts & Styles -->
+  <meta name="description" content="Intelligent real-time emergency resource allocation engine using OS scheduling, mutual exclusion, and DBMS transactions to route patients to the most suitable hospital.">
+  <meta name="author" content="Aviral Mittal">
+  <meta name="theme-color" content="#000000">
+
+  <!-- Apple-Inspired Design System -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="css/main.css">
   <link rel="stylesheet" href="css/components.css">
   <link rel="stylesheet" href="css/animations.css">
-  
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 100%22><text y=%22.9em%22 font-size=%2290%22>🏥</text></svg>">
+
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏥</text></svg>">
 </head>
 <body>
   <!-- Global Toast Notification Banner -->
-  <div id="globalNotificationBanner" style="display: none; position: fixed; top: 70px; right: 20px; z-index: 999; color: #fff; padding: 0.85rem 1.25rem; border-radius: var(--radius-md); font-weight: 600; font-size: 0.88rem; box-shadow: var(--shadow-lg); backdrop-filter: blur(10px);"></div>
+  <div id="globalNotificationBanner" style="display: none; position: fixed; top: 70px; right: 20px; z-index: 999; color: #fff; padding: 0.85rem 1.25rem; border-radius: var(--radius-md); font-weight: 600; font-size: 0.85rem; box-shadow: var(--shadow-lg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);"></div>
 
   <div class="app-container">
-    <!-- Top Navigation Bar -->
+    <!-- ═══════════ TOP NAVIGATION BAR ═══════════ -->
     <header class="top-navbar">
       <div class="brand-section">
         <div class="brand-icon">🏥</div>
         <div class="brand-title">
           <h1>Smart Emergency Resource Allocation</h1>
-          <p>OS + DBMS REAL-TIME COORDINATION ENGINE • PBL PHASE 1 (30%)</p>
+          <p>OS + DBMS REAL-TIME ENGINE · PBL PHASE 1</p>
         </div>
       </div>
 
-      <!-- Navigation Tabs -->
-      <nav class="nav-tabs">
-        <button class="nav-tab-btn active" data-tab="tab-ingestion">
+      <!-- Apple Segmented Navigation -->
+      <nav class="nav-tabs" aria-label="Main navigation">
+        <button class="nav-tab-btn active" data-tab="tab-ingestion" id="nav-emergency">
           <span>🚨</span> Emergency Intake
         </button>
-        <button class="nav-tab-btn" data-tab="tab-ranking">
+        <button class="nav-tab-btn" data-tab="tab-ranking" id="nav-ranking">
           <span>🎯</span> Suitability Ranking
         </button>
-        <button class="nav-tab-btn" data-tab="tab-acceptance">
+        <button class="nav-tab-btn" data-tab="tab-acceptance" id="nav-acceptance">
           <span>⚡</span> Acceptance Console
         </button>
-        <button class="nav-tab-btn" data-tab="tab-command">
+        <button class="nav-tab-btn" data-tab="tab-command" id="nav-command">
           <span>📊</span> Command Center
         </button>
-        <button class="nav-tab-btn" data-tab="tab-bankers">
-          <span>🧠</span> Banker's Algo Simulator
+        <button class="nav-tab-btn" data-tab="tab-bankers" id="nav-bankers">
+          <span>🧠</span> Banker's Algo
         </button>
-        <button class="nav-tab-btn" data-tab="tab-ambulance">
+        <button class="nav-tab-btn" data-tab="tab-ambulance" id="nav-ems">
           <span>🚑</span> EMS Fleet
         </button>
       </nav>
 
-      <!-- System Telemetry Clock & Live Status -->
+      <!-- System Telemetry -->
       <div class="top-meta">
         <div id="systemClock" class="system-clock">--:--:-- IST</div>
         <div class="live-indicator">
@@ -59,20 +64,20 @@
       </div>
     </header>
 
-    <!-- Main Dynamic Application Content -->
+    <!-- ═══════════ MAIN CONTENT AREA ═══════════ -->
     <main class="main-content">
-      
-      <!-- TAB 1: Emergency Ingestion & Priority Triage (Issue #1) -->
+
+      <!-- TAB 1: Emergency Ingestion & Priority Triage -->
       <section id="tab-ingestion" class="tab-pane active">
-        <!-- Process Lifecycle Progress -->
-        <div class="panel" style="padding: 1rem 1.5rem; margin-bottom: 1.5rem;">
-          <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">
-            OS Process State Progress:
+        <!-- OS Process Lifecycle Progress -->
+        <div class="panel" style="padding: 1rem 1.5rem; margin-bottom: 1.25rem;">
+          <div style="font-size: 0.7rem; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.25rem;">
+            OS Process State Lifecycle
           </div>
           <div class="state-tracker">
-            <div class="state-step active">1<span class="state-label">NEW (Triage)</span></div>
-            <div class="state-step">2<span class="state-label">WAITING (Queue)</span></div>
-            <div class="state-step">3<span class="state-label">MATCHING (Lock)</span></div>
+            <div class="state-step active">1<span class="state-label">NEW</span></div>
+            <div class="state-step">2<span class="state-label">WAITING</span></div>
+            <div class="state-step">3<span class="state-label">MATCHING</span></div>
             <div class="state-step">4<span class="state-label">ALLOCATED</span></div>
             <div class="state-step">5<span class="state-label">IN TREATMENT</span></div>
             <div class="state-step">6<span class="state-label">RELEASED</span></div>
@@ -83,8 +88,8 @@
           <!-- Left: Intake Form -->
           <div class="panel">
             <div class="panel-header">
-              <span class="panel-title">🚨 Patient Emergency Ingestion & Triage Intake</span>
-              <span class="panel-badge">Priority Queue Enqueue</span>
+              <span class="panel-title">🚨 Patient Emergency Ingestion & Triage</span>
+              <span class="panel-badge">Priority Queue</span>
             </div>
 
             <form id="emergencyIntakeForm">
@@ -94,7 +99,7 @@
                   <input type="text" id="patientName" class="form-input" placeholder="e.g. John Doe" value="Michael Chang">
                 </div>
                 <div class="form-group">
-                  <label class="form-label">Age & Gender</label>
+                  <label class="form-label">Age</label>
                   <input type="number" id="patientAge" class="form-input" placeholder="Age" value="62">
                 </div>
               </div>
@@ -135,13 +140,13 @@
                     <span class="triage-level-desc">Non-Urgent</span>
                   </div>
                 </div>
-                <div id="triageRecommendationInfo" style="background: rgba(15, 23, 42, 0.6); padding: 0.6rem 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                <div id="triageRecommendationInfo" style="background: rgba(0, 0, 0, 0.3); padding: 0.55rem 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--glass-border);">
                   <!-- Populated dynamically by JS -->
                 </div>
               </div>
 
               <div class="form-group">
-                <label class="form-label">Required Medical Resources (Hard Constraint Tags)</label>
+                <label class="form-label">Required Medical Resources (Hard Constraints)</label>
                 <div class="resource-tag-grid">
                   <div class="resource-chip selected" data-resource="icuBeds">🛏️ ICU Bed</div>
                   <div class="resource-chip selected" data-resource="ventilators">🫁 Ventilator</div>
@@ -158,8 +163,8 @@
                 <textarea id="emergencyNotes" class="form-textarea" rows="2" placeholder="BP 85/50, SpO2 88%, severe chest pain radiating to left arm...">Severe retrosternal chest pain, ST-elevation on lead II/III, SpO2 89%.</textarea>
               </div>
 
-              <button type="submit" class="btn btn-primary btn-block" style="padding: 0.85rem; font-size: 0.95rem;">
-                🚀 Register Emergency & Trigger OS Suitability Match
+              <button type="submit" class="btn btn-primary btn-block" style="padding: 0.85rem; font-size: 0.92rem;">
+                🚀 Register Emergency & Trigger Suitability Match
               </button>
             </form>
           </div>
@@ -170,9 +175,9 @@
               <span class="panel-title">📋 Active Priority Scheduling Queue</span>
               <span class="panel-badge">OS Min-Heap</span>
             </div>
-            
+
             <div style="overflow-x: auto;">
-              <table class="matrix-table" style="text-align: left; font-size: 0.8rem;">
+              <table class="matrix-table" style="text-align: left; font-size: 0.78rem;">
                 <thead>
                   <tr>
                     <th>ID</th>
@@ -190,24 +195,24 @@
               </table>
             </div>
 
-            <div style="margin-top: 1.25rem; font-size: 0.78rem; color: var(--text-muted); background: rgba(56, 189, 248, 0.05); padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid rgba(56, 189, 248, 0.15);">
-              ℹ️ <strong>OS Priority Scheduling Logic:</strong> Cases with higher triage severity (P1 > P2 > P3) automatically preempt or take precedence in hospital ranking evaluation to minimize critical mortality latency.
+            <div style="margin-top: 1.15rem; font-size: 0.75rem; color: var(--text-tertiary); background: rgba(10, 132, 255, 0.05); padding: 0.7rem 0.85rem; border-radius: var(--radius-sm); border: 1px solid rgba(10, 132, 255, 0.1);">
+              ℹ️ <strong style="color: var(--text-secondary);">OS Priority Scheduling:</strong> Cases with higher triage severity (P1 > P2 > P3) automatically preempt in hospital ranking evaluation to minimize critical mortality latency.
             </div>
           </div>
         </div>
       </section>
 
-      <!-- TAB 2: Hospital Suitability Ranking & Matching Engine (Issue #2) -->
+      <!-- TAB 2: Hospital Suitability Ranking & Matching Engine -->
       <section id="tab-ranking" class="tab-pane">
         <div class="panel">
           <div class="panel-header">
             <div>
-              <span class="panel-title">🎯 Smart Hospital Suitability Ranking Results</span>
-              <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem;">
+              <span class="panel-title">🎯 Smart Hospital Suitability Ranking</span>
+              <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.2rem; font-weight: 400;">
                 "Not just the nearest hospital — the nearest suitable hospital that can actually handle the emergency."
               </div>
             </div>
-            <span class="panel-badge">Multi-Factor OS Ranking</span>
+            <span class="panel-badge">Multi-Factor Scoring</span>
           </div>
 
           <div id="rankingResultsContainer">
@@ -216,12 +221,12 @@
         </div>
       </section>
 
-      <!-- TAB 3: Hospital Acceptance & Soft-Lock Console (Issue #4) -->
+      <!-- TAB 3: Hospital Acceptance & Soft-Lock Console -->
       <section id="tab-acceptance" class="tab-pane">
         <div class="panel">
           <div class="panel-header">
-            <span class="panel-title">⚡ Receiving Hospital Acceptance Terminal</span>
-            <span class="panel-badge">Mutual Exclusion & 90s TTL Lock</span>
+            <span class="panel-title">⚡ Hospital Acceptance Terminal</span>
+            <span class="panel-badge">Mutual Exclusion · 90s TTL</span>
           </div>
 
           <div id="acceptanceConsoleContent">
@@ -230,7 +235,7 @@
         </div>
       </section>
 
-      <!-- TAB 4: Command Center & KPI Metrics (Issue #3) -->
+      <!-- TAB 4: Command Center & KPI Metrics -->
       <section id="tab-command" class="tab-pane">
         <!-- KPI Row -->
         <div class="kpi-grid">
@@ -292,7 +297,7 @@
         <!-- Hospitals Directory Grid -->
         <div class="panel">
           <div class="panel-header">
-            <span class="panel-title">🏥 Regional Participating Hospital Capacity Grid</span>
+            <span class="panel-title">🏥 Regional Hospital Capacity Grid</span>
             <span class="panel-badge">Live DBMS Sync</span>
           </div>
           <div id="hospitalsDirectoryGrid" class="grid-3col">
@@ -301,32 +306,32 @@
         </div>
       </section>
 
-      <!-- TAB 5: OS Deadlock & Banker's Algorithm Simulator (Issue #5) -->
+      <!-- TAB 5: OS Banker's Algorithm Simulator -->
       <section id="tab-bankers" class="tab-pane">
         <div class="panel">
           <div class="panel-header">
             <div>
-              <span class="panel-title">🧠 OS Banker's Algorithm Safe-State Simulator</span>
-              <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem;">
-                Academic Viva Demonstration • Deadlock Avoidance for Compound Emergency Resource Requests
+              <span class="panel-title">🧠 Banker's Algorithm Safe-State Simulator</span>
+              <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.2rem;">
+                Academic Demonstration · Deadlock Avoidance for Compound Resource Requests
               </div>
             </div>
             <span class="panel-badge">OS Deadlock Avoidance</span>
           </div>
 
-          <!-- Vectors & Matrix Table -->
+          <!-- Vectors & Matrix -->
           <div class="grid-2col">
             <div>
-              <h4 style="font-size: 0.9rem; margin-bottom: 0.5rem; color: var(--status-blue);">
-                1. System Available Resources Vector [ICU, Vent, Specialist]
+              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--accent-blue); font-weight: 700;">
+                1. System Available Resources [ICU, Vent, Specialist]
               </h4>
-              <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
-                <div><label style="font-size: 0.75rem;">ICU Beds:</label> <input id="avail0" type="number" value="3" style="width:50px;" class="form-input"></div>
-                <div><label style="font-size: 0.75rem;">Ventilators:</label> <input id="avail1" type="number" value="3" style="width:50px;" class="form-input"></div>
-                <div><label style="font-size: 0.75rem;">Specialists:</label> <input id="avail2" type="number" value="2" style="width:50px;" class="form-input"></div>
+              <div style="display: flex; gap: 1rem; margin-bottom: 1.15rem;">
+                <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">ICU Beds</label> <input id="avail0" type="number" value="3" style="width:50px;" class="form-input"></div>
+                <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Ventilators</label> <input id="avail1" type="number" value="3" style="width:50px;" class="form-input"></div>
+                <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Specialists</label> <input id="avail2" type="number" value="2" style="width:50px;" class="form-input"></div>
               </div>
 
-              <h4 style="font-size: 0.9rem; margin-bottom: 0.5rem; color: var(--status-yellow);">
+              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--status-yellow); font-weight: 700;">
                 2. Allocation & Maximum Claims Matrix
               </h4>
               <table class="matrix-table">
@@ -394,13 +399,13 @@
               </table>
 
               <button id="btnRunBankers" class="btn btn-primary btn-block" style="margin-top: 1rem;">
-                ⚙️ Run Banker's Safety Algorithm & Compute Safe Sequence
+                ⚙️ Run Banker's Safety Algorithm
               </button>
             </div>
 
-            <!-- Right: Need Matrix & Execution Log -->
+            <!-- Right: Need Matrix & Results -->
             <div>
-              <h4 style="font-size: 0.9rem; margin-bottom: 0.5rem; color: var(--status-green);">
+              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--status-green); font-weight: 700;">
                 3. Calculated Need Matrix [Need = Max - Allocation]
               </h4>
               <table class="matrix-table">
@@ -425,7 +430,7 @@
         </div>
       </section>
 
-      <!-- TAB 6: Ambulance Fleet (Issue #6) -->
+      <!-- TAB 6: Ambulance Fleet -->
       <section id="tab-ambulance" class="tab-pane">
         <div class="panel">
           <div class="panel-header">
@@ -440,13 +445,13 @@
 
     </main>
 
-    <!-- Footer -->
+    <!-- ═══════════ FOOTER ═══════════ -->
     <footer class="app-footer">
       <div>
-        <strong>Smart Emergency Resource Allocation System</strong> • Academic OS + DBMS Project (PBL Phase 1)
+        <strong>Smart Emergency Resource Allocation System</strong> · OS + DBMS Academic Project
       </div>
       <div class="footer-links">
-        <a href="https://github.com/aviralmittal7150/SMART-EMERGENCY-RESOURCE-ALLOCATION-HOSPITAL-REFERRAL-SYSTEM" target="_blank">GitHub Repo</a>
+        <a href="https://github.com/aviralmittal7150/SMART-EMERGENCY-RESOURCE-ALLOCATION-HOSPITAL-REFERRAL-SYSTEM" target="_blank" rel="noopener">GitHub</a>
         <a href="PRD.md" target="_blank">PRD</a>
         <a href="WORKFLOW.md" target="_blank">Workflow</a>
         <a href="AGENTS.md" target="_blank">Handbook</a>
