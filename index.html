@@ -6,7 +6,7 @@
   <title>Smart Emergency Resource Allocation & Hospital Referral System</title>
   <meta name="description" content="Intelligent real-time emergency resource allocation engine using OS scheduling, mutual exclusion, and DBMS transactions to route patients to the most suitable hospital.">
   <meta name="author" content="Aviral Mittal">
-  <meta name="theme-color" content="#090d16">
+  <meta name="theme-color" content="#F4F7FB">
 
   <!-- Plus Jakarta Sans & Inter Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -19,7 +19,7 @@
 </head>
 <body>
   <!-- Global Toast Notification Banner -->
-  <div id="globalNotificationBanner" style="display: none; position: fixed; top: 75px; right: 24px; z-index: 999; color: #fff; padding: 0.9rem 1.35rem; border-radius: var(--radius-md); font-weight: 600; font-size: 0.875rem; box-shadow: var(--shadow-lg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);"></div>
+  <div id="globalNotificationBanner" style="display: none; position: fixed; top: 70px; right: 20px; z-index: 9999; color: #fff; padding: 0.75rem 1.25rem; border-radius: 10px; font-weight: 600; font-size: 0.85rem; box-shadow: 0 8px 24px rgba(15,39,71,0.18); max-width: 440px; line-height: 1.4;"></div>
 
   <div class="app-container">
     <!-- ═══════════ TOP NAVIGATION BAR ═══════════ -->
@@ -28,7 +28,6 @@
         <div class="brand-icon">🏥</div>
         <div class="brand-title">
           <h1>Smart Emergency Resource Allocation</h1>
-          <p>OS + DBMS REAL-TIME ENGINE · PBL PHASE 1</p>
         </div>
       </div>
 
@@ -36,6 +35,9 @@
       <nav class="nav-tabs" aria-label="Main navigation">
         <button class="nav-tab-btn active" data-tab="tab-ingestion" id="nav-emergency">
           <span>🚨</span> Emergency Intake
+        </button>
+        <button class="nav-tab-btn" data-tab="tab-roadside" id="nav-roadside">
+          <span>🛣️</span> Roadside Assist
         </button>
         <button class="nav-tab-btn" data-tab="tab-ranking" id="nav-ranking">
           <span>🎯</span> Suitability Ranking
@@ -54,8 +56,17 @@
         </button>
       </nav>
 
-      <!-- System Telemetry -->
+      <!-- System Telemetry & Auth Profile -->
       <div class="top-meta">
+        <button id="themeToggleBtn" class="theme-toggle-btn" aria-label="Toggle theme mode" title="Toggle Dark/Light Mode">
+          <span class="theme-toggle-icon" id="themeToggleIcon">🌙</span>
+          <span class="theme-toggle-text" id="themeToggleText">Dark</span>
+        </button>
+        <div id="userProfileBadge" class="user-profile-badge">
+          <span id="userRoleIcon">👑</span>
+          <span id="userRoleTitle">Admin Portal</span>
+          <button id="switchPortalBtn" class="btn-xs-outline">🔄 Switch Portal</button>
+        </div>
         <div id="systemClock" class="system-clock">--:--:-- IST</div>
         <div class="live-indicator">
           <span class="pulse-dot"></span>
@@ -69,19 +80,73 @@
 
       <!-- TAB 1: Emergency Ingestion & Priority Triage -->
       <section id="tab-ingestion" class="tab-pane active">
-        <!-- OS Process Lifecycle Progress -->
-        <div class="panel" style="padding: 1rem 1.5rem; margin-bottom: 1.5rem;">
-          <div style="font-size: 0.725rem; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.4rem;">
-            OS Process State Lifecycle Tracker
+        <!-- OS Process Lifecycle Progress — compact connected stepper -->
+        <div class="lifecycle-tracker-wrap">
+          <div class="lifecycle-tracker-label">OS Process State Lifecycle Tracker</div>
+          <div class="state-tracker" id="lifecycleTracker">
+
+            <div class="state-step-wrap">
+              <div class="state-step active" data-state="NEW">
+                <div class="state-node">1</div>
+                <span class="state-label">NEW</span>
+              </div>
+              <div class="state-connector"></div>
+            </div>
+
+            <div class="state-step-wrap">
+              <div class="state-step" data-state="WAITING">
+                <div class="state-node">2</div>
+                <span class="state-label">WAITING</span>
+              </div>
+              <div class="state-connector"></div>
+            </div>
+
+            <div class="state-step-wrap">
+              <div class="state-step" data-state="MATCHING">
+                <div class="state-node">3</div>
+                <span class="state-label">MATCHING</span>
+              </div>
+              <div class="state-connector"></div>
+            </div>
+
+            <div class="state-step-wrap">
+              <div class="state-step" data-state="ALLOCATED">
+                <div class="state-node">4</div>
+                <span class="state-label">ALLOCATED</span>
+              </div>
+              <div class="state-connector"></div>
+            </div>
+
+            <div class="state-step-wrap">
+              <div class="state-step" data-state="IN_TREATMENT">
+                <div class="state-node">5</div>
+                <span class="state-label">IN TREATMENT</span>
+              </div>
+              <div class="state-connector"></div>
+            </div>
+
+            <div class="state-step-wrap">
+              <div class="state-step" data-state="RELEASED">
+                <div class="state-node">6</div>
+                <span class="state-label">RELEASED</span>
+              </div>
+            </div>
+
           </div>
-          <div class="state-tracker">
-            <div class="state-step active">1<span class="state-label">NEW</span></div>
-            <div class="state-step">2<span class="state-label">WAITING</span></div>
-            <div class="state-step">3<span class="state-label">MATCHING</span></div>
-            <div class="state-step">4<span class="state-label">ALLOCATED</span></div>
-            <div class="state-step">5<span class="state-label">IN TREATMENT</span></div>
-            <div class="state-step">6<span class="state-label">RELEASED</span></div>
+        </div>
+
+        <!-- Roadside Accident Quick Switch Banner -->
+        <div class="roadside-hero-banner" id="btnJumpToRoadside">
+          <div class="roadside-hero-title">
+            <span style="font-size: 1.75rem;">🛣️</span>
+            <div>
+              <h3>Standing on the road &amp; an accident just happened?</h3>
+              <p>Tap here to speak or select symptoms — our engine instantly locates the nearest equipped hospital.</p>
+            </div>
           </div>
+          <button type="button" class="btn btn-danger btn-sm" style="pointer-events: none;">
+            🎙️ Launch Roadside Assist Mode ➔
+          </button>
         </div>
 
         <div class="grid-2col">
@@ -140,7 +205,7 @@
                     <span class="triage-level-desc">Non-Urgent</span>
                   </div>
                 </div>
-                <div id="triageRecommendationInfo" style="background: rgba(255, 255, 255, 0.04); padding: 0.65rem 0.9rem; border-radius: var(--radius-md); border: 1px solid var(--glass-border);">
+                <div id="triageRecommendationInfo">
                   <!-- Populated dynamically by JS -->
                 </div>
               </div>
@@ -176,7 +241,7 @@
               <span class="panel-badge">OS Min-Heap</span>
             </div>
 
-            <div style="overflow-x: auto;">
+            <div class="table-scroll">
               <table class="matrix-table">
                 <thead>
                   <tr>
@@ -195,11 +260,179 @@
               </table>
             </div>
 
-            <div style="margin-top: 1.15rem; font-size: 0.78rem; color: var(--text-tertiary); background: rgba(56, 189, 248, 0.06); padding: 0.75rem 1rem; border-radius: var(--radius-md); border: 1px solid rgba(56, 189, 248, 0.15);">
-              ℹ️ <strong style="color: var(--text-secondary);">OS Priority Scheduling:</strong> Cases with higher triage severity (P1 > P2 > P3) automatically preempt in hospital ranking evaluation to minimize critical mortality latency.
+            <div class="os-scheduling-note">
+              ℹ️ <strong>OS Priority Scheduling:</strong> Cases with higher triage severity (P1 &gt; P2 &gt; P3) automatically preempt in hospital ranking evaluation to minimize critical mortality latency.
             </div>
           </div>
         </div>
+      </section>
+
+      <!-- TAB: Roadside Accident & Voice Symptom Hospital Finder -->
+      <section id="tab-roadside" class="tab-pane">
+        <!-- Roadside Hero Banner -->
+        <div class="roadside-hero-banner">
+          <div class="roadside-hero-title">
+            <span style="font-size: 2.2rem;">🛣️</span>
+            <div>
+              <h2>Roadside Accident & Symptom-Based Hospital Finder</h2>
+              <p>Just tell or select symptoms from the accident scene — our real-time OS + DBMS engine locates the nearest suitable hospital with open surgical resources.</p>
+            </div>
+          </div>
+          <div class="roadside-hero-badge">
+            <span class="pulse-dot" style="background: var(--status-red);"></span>
+            <span>CITIZEN BYSTANDER MODE ACTIVE</span>
+          </div>
+        </div>
+
+        <!-- Roadside Location Selector Bar -->
+        <div class="roadside-loc-bar">
+          <div class="roadside-loc-info">
+            <span style="font-size: 1.25rem;">📍</span>
+            <div>
+              <div style="font-size: 0.68rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Current Roadside Location</div>
+              <div id="roadsideCurrentLocLabel">
+                Highway 44 - Mile Marker 12 (Expressway Collision Zone)
+              </div>
+            </div>
+            <span class="gps-live-tag" id="gpsStatusTag">
+              <span class="pulse-dot" style="background: var(--status-green); width: 6px; height: 6px;"></span>
+              GPS ACTIVE
+            </span>
+          </div>
+          <div style="display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap;">
+            <select id="roadsideLocationSelect" class="form-select" style="width: auto; padding: 0.45rem 0.85rem; font-size: 0.82rem;">
+              <!-- Populated by JS -->
+            </select>
+            <button id="btnUseGpsLocation" class="btn btn-secondary btn-sm" style="display: flex; align-items: center; gap: 0.35rem;">
+              <span>🎯</span> Use Real GPS
+            </button>
+          </div>
+        </div>
+
+        <!-- Intake & Triage Grid -->
+        <div class="grid-2col">
+          <!-- Left: Voice & Symptoms Input -->
+          <div class="voice-intake-card">
+            <div class="panel-header" style="padding-bottom: 0.75rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle);">
+              <span class="panel-title">🎙️ Tell Symptoms or Select Observations</span>
+              <span class="panel-badge">Voice + NLP Triage</span>
+            </div>
+
+            <!-- Voice Mic Section -->
+            <div class="mic-section">
+              <button type="button" id="roadsideMicBtn" class="mic-btn" title="Click to speak accident symptoms">
+                🎙️
+              </button>
+              <div id="roadsideMicStatus" class="mic-status-label">Tap microphone & tell what you see</div>
+              <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">
+                e.g. "Rider is unconscious, bleeding heavily from head and broken leg"
+              </div>
+              <div id="roadsideSoundwaves" class="soundwave-box">
+                <div class="soundwave-bar"></div>
+                <div class="soundwave-bar"></div>
+                <div class="soundwave-bar"></div>
+                <div class="soundwave-bar"></div>
+                <div class="soundwave-bar"></div>
+                <div class="soundwave-bar"></div>
+              </div>
+            </div>
+
+            <!-- Preset Scenarios -->
+            <div class="preset-scenarios-bar">
+              <span class="preset-scenarios-title">⚡ Instant Test Scenarios (1-Click):</span>
+              <div class="scenario-pill-grid">
+                <button type="button" class="scenario-pill" data-scenario="motorcycle">
+                  🏍️ Motorcycle Crash (Unconscious + Head Bleed)
+                </button>
+                <button type="button" class="scenario-pill" data-scenario="car_chest">
+                  🚗 Car Crash (Chest Impact + Gasping)
+                </button>
+                <button type="button" class="scenario-pill" data-scenario="pedestrian">
+                  🚶 Pedestrian Struck (Arterial Bleed)
+                </button>
+                <button type="button" class="scenario-pill" data-scenario="bike_fracture">
+                  🚴 Bike Fall (Arm Fracture)
+                </button>
+              </div>
+            </div>
+
+            <!-- Symptom Text Area -->
+            <div class="form-group" style="margin-top: 1rem;">
+              <label class="form-label" style="display: flex; justify-content: space-between;">
+                <span>Accident Observations & Symptoms Description</span>
+                <span style="font-size: 0.72rem; color: var(--text-muted);">Real-time ATLS parsing</span>
+              </label>
+              <textarea id="roadsideSymptomText" class="form-textarea" rows="3" placeholder="Speak into mic or type accident symptoms here (e.g. 'Severe head injury, driver bleeding heavily from ear, unconscious, crushed leg')..."></textarea>
+            </div>
+
+            <!-- Quick Roadside Symptom Tags -->
+            <div class="form-group" style="margin-top: 1rem;">
+              <label class="form-label">Tap Observed Roadside Signs (Multi-Select):</label>
+              <div class="roadside-tags-grid" id="roadsideTagsGrid">
+                <!-- Dynamically populated from SYMPTOM_DATABASE -->
+              </div>
+            </div>
+
+            <button type="button" id="btnAnalyzeRoadside" class="btn btn-primary btn-block" style="padding: 0.85rem; margin-top: 1.25rem; font-size: 0.95rem;">
+              🔍 Analyze Symptoms & Locate Nearest Suitable Hospital
+            </button>
+          </div>
+
+          <!-- Right: Real-Time Triage Assessment & First-Aid -->
+          <div>
+            <!-- AI Triage Assessment Panel -->
+            <div class="triage-diagnosis-panel">
+              <div class="triage-level-strip">
+                <div>
+                  <div style="font-size: 0.68rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">
+                    Operational Triage Level
+                  </div>
+                  <div id="roadsideTriageBadge">
+                    Level 1: Resuscitation (Immediate Life Threat)
+                  </div>
+                </div>
+                <div id="roadsidePreemptTag" class="badge-priority badge-p1" style="">
+                  ⚡ OS Preemptive Lock
+                </div>
+              </div>
+
+              <div id="roadsideEmergencyTitle">
+                Emergency Category: <strong style="color: #fff;">Polytrauma / Road Accident</strong>
+              </div>
+
+              <div style="font-size: 0.7rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.45rem;">
+                Mandatory Life-Saving Resources Required:
+              </div>
+              <div class="resource-capsule-grid" id="roadsideRequiredResourcesGrid">
+                <!-- Populated dynamically -->
+              </div>
+
+              <div id="roadsideTriageRationale">
+                High-velocity polytrauma with traumatic brain injury and hemorrhage detected. Preemptive OS queue priority allocated.
+              </div>
+            </div>
+
+            <!-- First-Aid Survival Instructions -->
+            <div class="first-aid-panel" id="roadsideFirstAidPanel">
+              <div class="first-aid-header">
+                <span>🩹</span>
+                <span>Immediate Roadside First-Aid Checklist (While Help Is En Route)</span>
+              </div>
+              <ol class="first-aid-list" id="roadsideFirstAidList">
+                <li>Check breathing and airway immediately. If breathing, do NOT move neck/spine.</li>
+                <li>Apply direct firm pressure with clean cloth to bleeding wounds.</li>
+                <li>Never administer food or liquids to an accident victim.</li>
+                <li>Keep the patient warm and talk to them continuously.</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════ THE RECOMMENDATION HERO CONTAINER ═══════════ -->
+        <div id="roadsideRecommendationContainer" style="margin-top: 1.5rem;">
+          <!-- Dynamically populated by renderRoadsideHospitalRecommendation() -->
+        </div>
+
       </section>
 
       <!-- TAB 2: Hospital Suitability Ranking & Matching Engine -->
@@ -208,7 +441,7 @@
           <div class="panel-header">
             <div>
               <span class="panel-title">🎯 Smart Hospital Suitability Ranking</span>
-              <div style="font-size: 0.78rem; color: var(--text-tertiary); margin-top: 0.25rem; font-weight: 500;">
+              <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem; font-weight: 400; font-style: italic;">
                 "Not just the nearest hospital — the nearest suitable hospital that can actually handle the emergency."
               </div>
             </div>
@@ -322,7 +555,7 @@
           <!-- Vectors & Matrix -->
           <div class="grid-2col">
             <div>
-              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--accent-cyan); font-weight: 700;">
+              <h4 style="font-size: 0.85rem; margin-bottom: 0.6rem; color: var(--accent); font-weight: 700;">
                 1. System Available Resources [ICU, Vent, Specialist]
               </h4>
               <div style="display: flex; gap: 1rem; margin-bottom: 1.15rem;">
@@ -331,8 +564,8 @@
                 <div><label style="font-size: 0.72rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Specialists</label> <input id="avail2" type="number" value="2" style="width:60px;" class="form-input"></div>
               </div>
 
-              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--status-amber); font-weight: 700;">
-                2. Allocation & Maximum Claims Matrix
+              <h4 style="font-size: 0.85rem; margin-bottom: 0.6rem; color: var(--status-amber); font-weight: 700;">
+                2. Allocation &amp; Maximum Claims Matrix
               </h4>
               <table class="matrix-table">
                 <thead>
@@ -405,7 +638,7 @@
 
             <!-- Right: Need Matrix & Results -->
             <div>
-              <h4 style="font-size: 0.88rem; margin-bottom: 0.6rem; color: var(--status-green); font-weight: 700;">
+              <h4 style="font-size: 0.85rem; margin-bottom: 0.6rem; color: var(--status-green); font-weight: 700;">
                 3. Calculated Need Matrix [Need = Max - Allocation]
               </h4>
               <table class="matrix-table">
@@ -457,6 +690,123 @@
         <a href="AGENTS.md" target="_blank">Handbook</a>
       </div>
     </footer>
+  </div>
+
+  <!-- ═══════════ AUTH & ROLE PORTAL MODAL ═══════════ -->
+  <div id="authPortalModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="auth-icon">🛡️</span>
+          <div>
+            <h2>System Role Portal & Security Control</h2>
+            <p>Access Control Isolation (Admin vs. Hospital Desk vs. Paramedic)</p>
+          </div>
+        </div>
+        <button id="closeAuthModalBtn" class="close-btn">&times;</button>
+      </div>
+      
+      <div class="role-selector-tabs">
+        <button type="button" class="role-tab-btn active" data-role-tab="admin">
+          👑 Admin Portal
+        </button>
+        <button type="button" class="role-tab-btn" data-role-tab="hospital">
+          🏥 Hospital Desk
+        </button>
+        <button type="button" class="role-tab-btn" data-role-tab="paramedic">
+          🚑 Paramedic Unit
+        </button>
+      </div>
+
+      <!-- Admin Form -->
+      <div id="rolePaneAdmin" class="role-pane active">
+        <div class="auth-info-banner">
+          🔑 <strong>Command Center Admin:</strong> Full unrestricted access to global network telemetry, Banker's Algorithm safe sequence visualizer, capacity overrides, and multi-hospital controls.
+        </div>
+        <form id="adminLoginForm" class="auth-form">
+          <div class="form-group">
+            <label class="form-label">Admin ID</label>
+            <input type="text" id="adminUsernameInput" class="form-input" value="admin">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Password</label>
+            <input type="password" id="adminPasswordInput" class="form-input" value="admin123">
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">👑 Login as Command Center Admin</button>
+        </form>
+      </div>
+
+      <!-- Hospital Desk Form -->
+      <div id="rolePaneHospital" class="role-pane">
+        <div class="auth-info-banner">
+          🏥 <strong>Hospital Access Limits:</strong> Hospital Desks can ONLY view & accept/reject referrals assigned to their specific facility and manage their own bed/doctor resources. Global admin settings & other hospital data are restricted.
+        </div>
+        <form id="hospitalLoginForm" class="auth-form">
+          <div class="form-group">
+            <label class="form-label">Select Hospital Facility</label>
+            <select id="hospitalSelectInput" class="form-select">
+              <option value="H-101">Apex City Trauma & Super Specialty Center</option>
+              <option value="H-102">St. Jude Metro General Hospital</option>
+              <option value="H-103" selected>Fortis Cardiac & Neuro Institute</option>
+              <option value="H-104">Memorial Community Healthcare Center</option>
+              <option value="H-105">Max Life Emergency & Research Center</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Desk Passcode</label>
+            <input type="password" id="hospitalPasswordInput" class="form-input" value="hospital123">
+          </div>
+          <button type="submit" class="btn btn-cyan btn-block">🏥 Login to Hospital Desk Console</button>
+        </form>
+      </div>
+
+      <!-- Paramedic Form -->
+      <div id="rolePaneParamedic" class="role-pane">
+        <div class="auth-info-banner">
+          🚑 <strong>Paramedic Dispatch Access:</strong> Access field emergency intake, priority triage queue, suitability matching engine, and ambulance fleet tracking.
+        </div>
+        <form id="paramedicLoginForm" class="auth-form">
+          <div class="form-group">
+            <label class="form-label">Paramedic Call Sign</label>
+            <input type="text" id="paramedicUnitInput" class="form-input" value="UNIT-402">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Access PIN</label>
+            <input type="password" id="paramedicPinInput" class="form-input" value="paramedic123">
+          </div>
+          <button type="submit" class="btn btn-accent btn-block">🚑 Login as Field Paramedic</button>
+        </form>
+      </div>
+
+      <!-- Quick Demo Role Switcher -->
+      <div class="quick-demo-login-bar">
+        <span class="quick-demo-title">⚡ Instant Demo Portal Logins:</span>
+        <div class="quick-demo-btns">
+          <button type="button" class="btn-demo" id="quickLoginAdmin">👑 Admin</button>
+          <button type="button" class="btn-demo" id="quickLoginFortis">🏥 Fortis Desk</button>
+          <button type="button" class="btn-demo" id="quickLoginApex">🏥 Apex Desk</button>
+          <button type="button" class="btn-demo" id="quickLoginEMS">🚑 Paramedic</button>
+        </div>
+      </div>
+    </div>
+  <!-- ═══════════ GPS TURN-BY-TURN NAVIGATION MODAL ═══════════ -->
+  <div id="routeDirectionsModal" class="modal-overlay" style="display: none; background: rgba(15,39,71,0.55);">
+    <div class="modal-card" style="max-width: 580px;">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="auth-icon" style="background: linear-gradient(135deg, #0284c7 0%, #10b981 100%);">🧭</span>
+          <div>
+            <h2>Turn-by-Turn GPS Navigation Route</h2>
+            <p>Real-Time Emergency Corridor to Recommended Hospital</p>
+          </div>
+        </div>
+        <button id="closeRouteModalBtn" class="close-btn">&times;</button>
+      </div>
+
+      <div id="routeModalContent" style="padding: 1.25rem 0;">
+        <!-- Populated dynamically by JS -->
+      </div>
+    </div>
   </div>
 
   <!-- Main JavaScript App -->

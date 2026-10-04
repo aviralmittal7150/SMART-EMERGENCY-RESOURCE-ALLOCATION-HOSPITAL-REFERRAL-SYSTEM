@@ -11,6 +11,7 @@
     "test:locking": "node --test tests/locking.test.js",
     "test:bankers": "node --test tests/bankers.test.js",
     "test:lifecycle": "node --test tests/lifecycle.test.js",
+    "test:symptom": "node --test tests/symptom_triage.test.js",
     "dev": "serve -l 3000 ."
   },
   "keywords": ["emergency", "hospital-referral", "operating-systems", "dbms", "priority-queue", "bankers-algorithm"],
