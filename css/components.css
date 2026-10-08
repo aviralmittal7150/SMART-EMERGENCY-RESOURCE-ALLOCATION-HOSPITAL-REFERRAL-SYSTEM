@@ -1269,9 +1269,11 @@
   cursor: not-allowed;
 }
 .nav-tab-btn.locked-tab::after {
-  content: "🔒";
+  content: "(Locked)";
   font-size: 0.65rem;
   margin-left: 3px;
+  font-weight: 500;
+  opacity: 0.8;
 }
 
 /* ════════════════════════════════════════════════

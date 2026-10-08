@@ -11,12 +11,41 @@ import {
   calculateHaversineDistance,
   generateHospitalRecommendationReason
 } from './symptom_triage.js';
+import {
+  AuthAPI,
+  HospitalsAPI,
+  EmergenciesAPI,
+  ReferralsAPI,
+  DoctorsAPI,
+  AmbulancesAPI,
+  AnalyticsAPI,
+  initWebSocket,
+  checkServerHealth
+} from './api.js';
+
+// Seed Doctors for UI Registry (Phase 2 P2-07)
+const initialDoctorsList = [
+  { doctor_id: 'DR-001', hospital_id: 'H-101', full_name: 'Dr. Arjun Mehta', specialization: 'CARDIOLOGIST', availability_status: 'AVAILABLE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-002', hospital_id: 'H-101', full_name: 'Dr. Priya Sharma', specialization: 'NEUROLOGIST', availability_status: 'IN_PROCEDURE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-003', hospital_id: 'H-101', full_name: 'Dr. Kabir Singh', specialization: 'TRAUMA_SURGEON', availability_status: 'AVAILABLE', shift_start: '20:00', shift_end: '08:00' },
+  { doctor_id: 'DR-004', hospital_id: 'H-101', full_name: 'Dr. Nisha Patel', specialization: 'PEDIATRICIAN', availability_status: 'AVAILABLE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-005', hospital_id: 'H-102', full_name: 'Dr. Rajan Verma', specialization: 'TRAUMA_SURGEON', availability_status: 'AVAILABLE', shift_start: '09:00', shift_end: '21:00' },
+  { doctor_id: 'DR-006', hospital_id: 'H-103', full_name: 'Dr. Suresh Iyer', specialization: 'CARDIOLOGIST', availability_status: 'AVAILABLE', shift_start: '07:00', shift_end: '19:00' },
+  { doctor_id: 'DR-007', hospital_id: 'H-103', full_name: 'Dr. Anika Bose', specialization: 'NEUROLOGIST', availability_status: 'AVAILABLE', shift_start: '07:00', shift_end: '19:00' },
+  { doctor_id: 'DR-008', hospital_id: 'H-103', full_name: 'Dr. Yusuf Khan', specialization: 'TRAUMA_SURGEON', availability_status: 'AVAILABLE', shift_start: '07:00', shift_end: '19:00' },
+  { doctor_id: 'DR-009', hospital_id: 'H-103', full_name: 'Dr. Sunita Rao', specialization: 'PEDIATRICIAN', availability_status: 'OFF_DUTY', shift_start: '19:00', shift_end: '07:00' },
+  { doctor_id: 'DR-010', hospital_id: 'H-104', full_name: 'Dr. Meera Krishnan', specialization: 'PEDIATRICIAN', availability_status: 'AVAILABLE', shift_start: '09:00', shift_end: '21:00' },
+  { doctor_id: 'DR-011', hospital_id: 'H-105', full_name: 'Dr. Vikram Joshi', specialization: 'CARDIOLOGIST', availability_status: 'AVAILABLE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-012', hospital_id: 'H-105', full_name: 'Dr. Deepa Nair', specialization: 'NEUROLOGIST', availability_status: 'IN_PROCEDURE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-013', hospital_id: 'H-105', full_name: 'Dr. Rohan Gupta', specialization: 'TRAUMA_SURGEON', availability_status: 'AVAILABLE', shift_start: '08:00', shift_end: '20:00' }
+];
 
 // Global Application State
 const state = {
   hospitals: JSON.parse(JSON.stringify(initialHospitals)),
   ambulances: JSON.parse(JSON.stringify(initialAmbulances)),
   emergencyQueue: JSON.parse(JSON.stringify(initialEmergencyQueue)),
+  doctors: JSON.parse(JSON.stringify(initialDoctorsList)),
   selectedTriage: 1,
   selectedEmergencyType: "CARDIAC",
   customRequirements: {
@@ -36,6 +65,12 @@ const state = {
     recognition: null,
     lastAnalysis: null,
     lastRanked: []
+  },
+  mapInstance: null,
+  mapMarkers: {
+    hospitals: [],
+    ambulances: [],
+    roadside: []
   }
 };
 
@@ -62,6 +97,8 @@ document.addEventListener("DOMContentLoaded", () => {
   attachFormListeners();
   initRoadsideAssist();
   initAuthPortalModal();
+  initDoctorsScheduler();
+  initRealtimeBackendBridge();
 });
 
 // Theme Toggle Engine (Dark / Light Mode)
@@ -145,6 +182,8 @@ function initNavbarTabs() {
       if (targetId === "tab-acceptance") renderHospitalAcceptanceView();
       if (targetId === "tab-bankers") renderBankersView();
       if (targetId === "tab-ambulance") renderAmbulanceFleet();
+      if (targetId === "tab-map") renderLeafletMap();
+      if (targetId === "tab-doctors") renderDoctorsRoster();
     });
   });
 }
@@ -1371,4 +1410,327 @@ function initAuthPortalModal() {
   document.getElementById("quickLoginApex")?.addEventListener("click", () => setRole("hospital", "Apex Desk Console", "🏥"));
   document.getElementById("quickLoginEMS")?.addEventListener("click", () => setRole("paramedic", "Paramedic Dispatch Unit", "🚑"));
 }
+
+/* ====================================================================
+   PHASE 2: INTERACTIVE CITY GPS MAP (LEAFLET / OSM) — P2-06
+   Dynamic geospatial mapping of participating hospitals, bed capacity
+   heatmaps, moving ambulance markers, and roadside accident points.
+   ==================================================================== */
+
+function renderLeafletMap() {
+  const mapContainer = document.getElementById("leafletMapContainer");
+  if (!mapContainer || typeof L === "undefined") return;
+
+  const defaultCenter = [28.6300, 77.2180];
+
+  if (!state.mapInstance) {
+    state.mapInstance = L.map("leafletMapContainer").setView(defaultCenter, 13);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(state.mapInstance);
+
+    // Layer toggle events
+    document.getElementById("layerToggleHospitals")?.addEventListener("change", (e) => {
+      state.mapMarkers.hospitals.forEach(m => e.target.checked ? state.mapInstance.addLayer(m) : state.mapInstance.removeLayer(m));
+    });
+
+    document.getElementById("layerToggleAmbulances")?.addEventListener("change", (e) => {
+      state.mapMarkers.ambulances.forEach(m => e.target.checked ? state.mapInstance.addLayer(m) : state.mapInstance.removeLayer(m));
+    });
+
+    document.getElementById("layerToggleRoadside")?.addEventListener("change", (e) => {
+      state.mapMarkers.roadside.forEach(m => e.target.checked ? state.mapInstance.addLayer(m) : state.mapInstance.removeLayer(m));
+    });
+
+    document.getElementById("btnRecenterMap")?.addEventListener("click", () => {
+      state.mapInstance.setView(defaultCenter, 13);
+    });
+  } else {
+    // Invalidate map size so Leaflet recalculates dimensions when tab is revealed
+    setTimeout(() => state.mapInstance.invalidateSize(), 150);
+  }
+
+  // Clear existing markers
+  state.mapMarkers.hospitals.forEach(m => state.mapInstance.removeLayer(m));
+  state.mapMarkers.ambulances.forEach(m => state.mapInstance.removeLayer(m));
+  state.mapMarkers.roadside.forEach(m => state.mapInstance.removeLayer(m));
+
+  state.mapMarkers.hospitals = [];
+  state.mapMarkers.ambulances = [];
+  state.mapMarkers.roadside = [];
+
+  // 1. Render Hospital Markers with Capacity Heatmap Color
+  state.hospitals.forEach(h => {
+    if (!h.coordinates) return;
+    const icuAvail = h.resources?.icuBeds?.available ?? 0;
+    const icuTotal = h.resources?.icuBeds?.total ?? 1;
+    const ratio = icuAvail / icuTotal;
+
+    let markerColor = "#16a34a"; // Green (>= 20%)
+    if (h.status === "CLOSED" || icuAvail === 0) {
+      markerColor = "#dc2626"; // Red (Closed / 0 Beds)
+    } else if (ratio < 0.2) {
+      markerColor = "#d97706"; // Amber (< 20%)
+    }
+
+    const circle = L.circleMarker([h.coordinates.lat, h.coordinates.lng], {
+      radius: 12,
+      fillColor: markerColor,
+      color: "#ffffff",
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 0.85
+    });
+
+    const popupHtml = `
+      <div style="font-family: var(--font-main); min-width: 200px;">
+        <strong style="color: var(--text-heading); font-size: 0.9rem;">${h.name}</strong>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;">${h.address}</div>
+        <hr style="margin: 6px 0; border: 0; border-top: 1px solid #e2e8f0;">
+        <div style="font-size: 0.78rem;"><strong>Status:</strong> <span style="color: ${markerColor}; font-weight: 700;">${h.status}</span></div>
+        <div style="font-size: 0.78rem;"><strong>ICU Beds:</strong> ${icuAvail} / ${icuTotal} available</div>
+        <div style="font-size: 0.78rem;"><strong>Ventilators:</strong> ${h.resources?.ventilators?.available ?? 0} open</div>
+        <div style="font-size: 0.78rem;"><strong>Emergency OT:</strong> ${h.resources?.emergencyOT?.available ?? 0} theatres</div>
+        <div style="font-size: 0.78rem;"><strong>Rating:</strong> ⭐ ${h.rating}/5.0</div>
+      </div>
+    `;
+
+    circle.bindPopup(popupHtml);
+    circle.addTo(state.mapInstance);
+    state.mapMarkers.hospitals.push(circle);
+  });
+
+  // 2. Render EMS Ambulance Markers
+  const hospitalCoordMap = {
+    "H-101": [28.6300, 77.2180],
+    "H-102": [28.6420, 77.2250],
+    "H-103": [28.6050, 77.2020],
+    "H-104": [28.6380, 77.2220],
+    "H-105": [28.6520, 77.1650],
+    "H-106": [28.6310, 77.2320]
+  };
+
+  state.ambulances.forEach((amb, idx) => {
+    const base = hospitalCoordMap[amb.hospitalId] || defaultCenter;
+    // Slight offset for visual distinctness
+    const offsetLat = base[0] + (idx * 0.003 - 0.006);
+    const offsetLng = base[1] + (idx * 0.003 - 0.006);
+
+    const ambMarker = L.circleMarker([offsetLat, offsetLng], {
+      radius: 9,
+      fillColor: "#2563eb",
+      color: "#ffffff",
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 0.95
+    });
+
+    const popupHtml = `
+      <div style="font-family: var(--font-main);">
+        <strong style="color: #1e3a8a;">🚑 ${amb.id}</strong> (${amb.type})
+        <div style="font-size: 0.75rem; margin-top: 4px;"><strong>Station:</strong> ${amb.hospitalId}</div>
+        <div style="font-size: 0.75rem;"><strong>Status:</strong> <span style="font-weight: 700; color: #2563eb;">${amb.status}</span></div>
+        <div style="font-size: 0.75rem;"><strong>ETA:</strong> ${amb.etaMins ? `${amb.etaMins} mins` : 'Standby'}</div>
+      </div>
+    `;
+
+    ambMarker.bindPopup(popupHtml);
+    ambMarker.addTo(state.mapInstance);
+    state.mapMarkers.ambulances.push(ambMarker);
+  });
+
+  // 3. Render Roadside Incident Hotspot Markers
+  ROADSIDE_HOTSPOTS.forEach(spot => {
+    const spotMarker = L.circleMarker([spot.lat, spot.lng], {
+      radius: 10,
+      fillColor: "#f97316",
+      color: "#ffffff",
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 0.85
+    });
+
+    const popupHtml = `
+      <div style="font-family: var(--font-main);">
+        <strong style="color: #c2410c;">⚠️ ${spot.name}</strong>
+        <div style="font-size: 0.75rem; color: #475569; margin-top: 2px;">${spot.address}</div>
+        <div style="font-size: 0.75rem; margin-top: 4px;"><strong>Landmark:</strong> ${spot.landmark}</div>
+      </div>
+    `;
+
+    spotMarker.bindPopup(popupHtml);
+    spotMarker.addTo(state.mapInstance);
+    state.mapMarkers.roadside.push(spotMarker);
+  });
+}
+
+/* ====================================================================
+   PHASE 2: DOCTOR & SPECIALIST SHIFT SCHEDULER — P2-07
+   Live doctor roster management with availability status toggle,
+   specialization filter, shift timings, and new doctor registration.
+   ==================================================================== */
+
+function initDoctorsScheduler() {
+  const facilityFilter = document.getElementById("doctorFacilityFilter");
+  const specFilter = document.getElementById("doctorSpecFilter");
+  const statusFilter = document.getElementById("doctorStatusFilter");
+
+  [facilityFilter, specFilter, statusFilter].forEach(el => {
+    el?.addEventListener("change", () => renderDoctorsRoster());
+  });
+
+  // Modal open/close
+  const modal = document.getElementById("addDoctorModal");
+  const btnOpen = document.getElementById("btnOpenAddDoctorModal");
+  const btnClose = document.getElementById("closeDoctorModalBtn");
+
+  if (btnOpen && modal) {
+    btnOpen.addEventListener("click", () => modal.style.display = "flex");
+  }
+  if (btnClose && modal) {
+    btnClose.addEventListener("click", () => modal.style.display = "none");
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.style.display = "none";
+    });
+  }
+
+  // Add Doctor Form Submit
+  const addForm = document.getElementById("addDoctorForm");
+  if (addForm) {
+    addForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const hospId = document.getElementById("newDoctorHospital")?.value || "H-101";
+      const name = document.getElementById("newDoctorName")?.value?.trim() || "Dr. Anonymous";
+      const spec = document.getElementById("newDoctorSpec")?.value || "GENERAL_ER";
+      const start = document.getElementById("newDoctorShiftStart")?.value || "08:00";
+      const end = document.getElementById("newDoctorShiftEnd")?.value || "20:00";
+
+      const newDoc = {
+        doctor_id: `DR-${String(state.doctors.length + 1).padStart(3, '0')}`,
+        hospital_id: hospId,
+        full_name: name,
+        specialization: spec,
+        availability_status: "AVAILABLE",
+        shift_start: start,
+        shift_end: end
+      };
+
+      state.doctors.push(newDoc);
+      renderDoctorsRoster();
+      if (modal) modal.style.display = "none";
+      addForm.reset();
+      showNotification(`👨‍⚕️ Added ${newDoc.full_name} to ${hospId} emergency roster.`, "success");
+    });
+  }
+
+  renderDoctorsRoster();
+}
+
+function renderDoctorsRoster() {
+  const tbody = document.getElementById("doctorsTableBody");
+  if (!tbody) return;
+
+  const facilityFilter = document.getElementById("doctorFacilityFilter")?.value || "ALL";
+  const specFilter = document.getElementById("doctorSpecFilter")?.value || "ALL";
+  const statusFilter = document.getElementById("doctorStatusFilter")?.value || "ALL";
+
+  let filtered = [...state.doctors];
+
+  if (facilityFilter !== "ALL") filtered = filtered.filter(d => d.hospital_id === facilityFilter);
+  if (specFilter !== "ALL") filtered = filtered.filter(d => d.specialization === specFilter);
+  if (statusFilter !== "ALL") filtered = filtered.filter(d => d.availability_status === statusFilter);
+
+  tbody.innerHTML = "";
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No specialists match the selected criteria.</td></tr>`;
+    return;
+  }
+
+  const specLabelMap = {
+    "CARDIOLOGIST": "Interventional Cardiologist",
+    "NEUROLOGIST": "Neurosurgeon",
+    "TRAUMA_SURGEON": "Trauma Surgeon",
+    "PEDIATRICIAN": "Pediatrician",
+    "GENERAL_ER": "General ER Physician"
+  };
+
+  const hospNameMap = {
+    "H-101": "Apex City Trauma",
+    "H-102": "St. Jude Metro",
+    "H-103": "Fortis Cardiac & Neuro",
+    "H-104": "Memorial Healthcare",
+    "H-105": "Max Life Emergency",
+    "H-106": "Downtown Care (Closed)"
+  };
+
+  filtered.forEach(doc => {
+    const tr = document.createElement("tr");
+
+    let statusBadgeClass = "badge-open";
+    if (doc.availability_status === "IN_PROCEDURE") statusBadgeClass = "badge-limited";
+    if (doc.availability_status === "OFF_DUTY") statusBadgeClass = "badge-closed";
+
+    tr.innerHTML = `
+      <td style="font-family: var(--font-mono); font-weight: 700; color: var(--accent); font-size: 0.8rem;">${doc.doctor_id}</td>
+      <td><strong style="color: var(--text-heading);">${doc.full_name}</strong></td>
+      <td style="font-size: 0.82rem; color: var(--text-secondary);">${hospNameMap[doc.hospital_id] || doc.hospital_id}</td>
+      <td style="font-size: 0.82rem;">${specLabelMap[doc.specialization] || doc.specialization}</td>
+      <td style="font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted);">${doc.shift_start} - ${doc.shift_end}</td>
+      <td><span class="badge-status ${statusBadgeClass}">${doc.availability_status.replace('_', ' ')}</span></td>
+      <td>
+        <select class="form-select doc-status-selector" data-doc-id="${doc.doctor_id}" style="width: auto; padding: 0.2rem 0.5rem; font-size: 0.75rem;">
+          <option value="AVAILABLE" ${doc.availability_status === 'AVAILABLE' ? 'selected' : ''}>Available</option>
+          <option value="IN_PROCEDURE" ${doc.availability_status === 'IN_PROCEDURE' ? 'selected' : ''}>In Procedure</option>
+          <option value="OFF_DUTY" ${doc.availability_status === 'OFF_DUTY' ? 'selected' : ''}>Off Duty</option>
+        </select>
+      </td>
+    `;
+
+    tbody.appendChild(tr);
+  });
+
+  // Attach status toggle listener
+  document.querySelectorAll(".doc-status-selector").forEach(sel => {
+    sel.addEventListener("change", (e) => {
+      const docId = e.target.getAttribute("data-doc-id");
+      const targetDoc = state.doctors.find(d => d.doctor_id === docId);
+      if (targetDoc) {
+        targetDoc.availability_status = e.target.value;
+        renderDoctorsRoster();
+        showNotification(`👨‍⚕️ Updated ${targetDoc.full_name} status to ${e.target.value.replace('_', ' ')}.`, "normal");
+      }
+    });
+  });
+}
+
+/* ====================================================================
+   PHASE 2: REAL-TIME WEBSOCKET BACKEND BRIDGE (P2-04 / P2-08)
+   Attempts connection to Express/Socket.io backend if running,
+   enabling seamless live synchronization across browser clients.
+   ==================================================================== */
+
+function initRealtimeBackendBridge() {
+  checkServerHealth().then(health => {
+    if (health) {
+      console.log("[BRIDGE] Backend server detected online:", health);
+      showNotification(`🟢 Connected to Express.js REST API & WebSocket Server (v${health.version})`, "success");
+
+      initWebSocket(null, (eventType, data) => {
+        if (eventType === "referral:incoming") {
+          showNotification(`🚨 [WebSocket Alert] Incoming emergency referral for ${data.hospital_id}!`, "urgent");
+        } else if (eventType === "allocation:committed") {
+          showNotification(`🎉 [WebSocket Alert] Referral ${data.requestId} committed to ${data.hospitalId}!`, "success");
+        } else if (eventType === "lock:expired") {
+          showNotification(`⏱️ [WebSocket Alert] Referral timed out (90s). Automatic failover in progress.`, "urgent");
+        }
+      });
+    } else {
+      console.log("[BRIDGE] Operating in standalone browser mode with in-memory DBMS simulation.");
+    }
+  });
+}
+
 

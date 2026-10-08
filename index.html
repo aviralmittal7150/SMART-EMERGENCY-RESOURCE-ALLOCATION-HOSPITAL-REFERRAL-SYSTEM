@@ -51,6 +51,12 @@
         <button class="nav-tab-btn" data-tab="tab-bankers" id="nav-bankers">
           <span>🧠</span> Banker's Algo
         </button>
+        <button class="nav-tab-btn" data-tab="tab-map" id="nav-map">
+          <span>🗺️</span> City GPS Map
+        </button>
+        <button class="nav-tab-btn" data-tab="tab-doctors" id="nav-doctors">
+          <span>👨‍⚕️</span> Doctor Shifts
+        </button>
         <button class="nav-tab-btn" data-tab="tab-ambulance" id="nav-ems">
           <span>🚑</span> EMS Fleet
         </button>
@@ -676,6 +682,176 @@
         </div>
       </section>
 
+      <!-- TAB 7: Interactive City GPS Map (Leaflet / OSM) — Phase 2 (P2-06) -->
+      <section id="tab-map" class="tab-pane">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">🗺️ Interactive Regional Emergency & Capacity Heatmap</span>
+              <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                Live OpenStreetMap Telemetry · Hospital ICU Capacity Status · Moving EMS Ambulances · Roadside Incident Hotspots
+              </div>
+            </div>
+            <span class="panel-badge">Leaflet GPS Engine</span>
+          </div>
+
+          <div style="display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center;">
+            <div style="font-size: 0.8rem; font-weight: 600; color: var(--text-heading);">Live Layers:</div>
+            <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; cursor: pointer;">
+              <input type="checkbox" id="layerToggleHospitals" checked> Hospitals & Capacity
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; cursor: pointer;">
+              <input type="checkbox" id="layerToggleAmbulances" checked> Active Ambulances
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; cursor: pointer;">
+              <input type="checkbox" id="layerToggleRoadside" checked> Roadside Hotspots
+            </label>
+            <button id="btnRecenterMap" class="btn btn-secondary btn-sm" style="margin-left: auto;">
+              🎯 Reset Map Center
+            </button>
+          </div>
+
+          <div id="leafletMapContainer" style="height: 520px; width: 100%; border-radius: var(--radius-md); border: 1px solid var(--border); overflow: hidden; background: #e5e7eb; position: relative;">
+            <!-- Leaflet Mount -->
+          </div>
+
+          <div style="display: flex; gap: 1.5rem; margin-top: 0.85rem; font-size: 0.75rem; color: var(--text-secondary); flex-wrap: wrap;">
+            <div><span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #16a34a; margin-right: 4px;"></span> <strong>Green:</strong> Open / Ample ICU Beds (&ge; 20%)</div>
+            <div><span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #d97706; margin-right: 4px;"></span> <strong>Amber:</strong> Limited Capacity (&lt; 20%)</div>
+            <div><span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #dc2626; margin-right: 4px;"></span> <strong>Red:</strong> Zero ICU Beds / Hospital Closed (Divert)</div>
+            <div><span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #2563eb; margin-right: 4px;"></span> <strong>Blue:</strong> EMS Ambulance Telemetry</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 8: Doctor & Specialist Shift Scheduler — Phase 2 (P2-07) -->
+      <section id="tab-doctors" class="tab-pane">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">👨‍⚕️ Specialist On-Call & Shift Scheduler</span>
+              <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                DBMS-Synchronized Emergency Specialist Roster & Operating Room Availability
+              </div>
+            </div>
+            <span class="panel-badge">DBMS Doctor Registry</span>
+          </div>
+
+          <!-- Doctor Filter and Add Controls -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div style="display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap;">
+              <select id="doctorFacilityFilter" class="form-select" style="width: auto; font-size: 0.82rem; padding: 0.4rem 0.75rem;">
+                <option value="ALL">All Facilities</option>
+                <option value="H-101">Apex City Trauma (H-101)</option>
+                <option value="H-102">St. Jude Metro (H-102)</option>
+                <option value="H-103">Fortis Cardiac & Neuro (H-103)</option>
+                <option value="H-104">Memorial Healthcare (H-104)</option>
+                <option value="H-105">Max Life Research (H-105)</option>
+              </select>
+
+              <select id="doctorSpecFilter" class="form-select" style="width: auto; font-size: 0.82rem; padding: 0.4rem 0.75rem;">
+                <option value="ALL">All Specializations</option>
+                <option value="CARDIOLOGIST">Cardiologist</option>
+                <option value="NEUROLOGIST">Neurologist</option>
+                <option value="TRAUMA_SURGEON">Trauma Surgeon</option>
+                <option value="PEDIATRICIAN">Pediatrician</option>
+              </select>
+
+              <select id="doctorStatusFilter" class="form-select" style="width: auto; font-size: 0.82rem; padding: 0.4rem 0.75rem;">
+                <option value="ALL">All Shift Statuses</option>
+                <option value="AVAILABLE">Available</option>
+                <option value="IN_PROCEDURE">In Procedure</option>
+                <option value="OFF_DUTY">Off Duty</option>
+              </select>
+            </div>
+
+            <button id="btnOpenAddDoctorModal" class="btn btn-primary btn-sm">
+              ➕ Add Specialist to Roster
+            </button>
+          </div>
+
+          <!-- Doctors Roster Table -->
+          <div class="table-scroll">
+            <table class="matrix-table">
+              <thead>
+                <tr>
+                  <th>Doctor ID</th>
+                  <th>Specialist Name</th>
+                  <th>Hospital Facility</th>
+                  <th>Specialization</th>
+                  <th>On-Call Shift</th>
+                  <th>Live Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="doctorsTableBody">
+                <!-- Rendered dynamically via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Add Doctor Modal -->
+        <div id="addDoctorModal" class="modal-overlay" style="display: none;">
+          <div class="modal-card" style="max-width: 500px;">
+            <div class="modal-header">
+              <div class="modal-title-group">
+                <span class="auth-icon">👨‍⚕️</span>
+                <div>
+                  <h2>Add On-Call Specialist</h2>
+                  <p>Register emergency doctor to hospital active shift schedule</p>
+                </div>
+              </div>
+              <button id="closeDoctorModalBtn" class="close-btn">&times;</button>
+            </div>
+
+            <form id="addDoctorForm" style="margin-top: 1rem;">
+              <div class="form-group">
+                <label class="form-label">Hospital Facility</label>
+                <select id="newDoctorHospital" class="form-select" required>
+                  <option value="H-101">Apex City Trauma & Super Specialty Center</option>
+                  <option value="H-102">St. Jude Metro General Hospital</option>
+                  <option value="H-103">Fortis Cardiac & Neuro Institute</option>
+                  <option value="H-104">Memorial Community Healthcare</option>
+                  <option value="H-105">Max Life Emergency & Research Center</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Full Name</label>
+                <input type="text" id="newDoctorName" class="form-input" placeholder="e.g. Dr. Kavita Sharma" required>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Specialization</label>
+                <select id="newDoctorSpec" class="form-select" required>
+                  <option value="CARDIOLOGIST">Interventional Cardiologist</option>
+                  <option value="NEUROLOGIST">Neurosurgeon / Neurologist</option>
+                  <option value="TRAUMA_SURGEON">Emergency Trauma Surgeon</option>
+                  <option value="PEDIATRICIAN">Pediatric Emergency Specialist</option>
+                  <option value="GENERAL_ER">General Emergency Physician</option>
+                </select>
+              </div>
+
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label class="form-label">Shift Start</label>
+                  <input type="time" id="newDoctorShiftStart" class="form-input" value="08:00" required>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Shift End</label>
+                  <input type="time" id="newDoctorShiftEnd" class="form-input" value="20:00" required>
+                </div>
+              </div>
+
+              <button type="submit" class="btn btn-primary btn-block" style="margin-top: 0.5rem;">
+                💾 Save Specialist to Shift Registry
+              </button>
+            </form>
+          </div>
+        </div>
+      </section>
+
     </main>
 
     <!-- ═══════════ FOOTER ═══════════ -->
@@ -808,6 +984,13 @@
       </div>
     </div>
   </div>
+
+  <!-- Socket.io Client (Phase 2 — Real-Time WebSocket) -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+
+  <!-- Leaflet Map (Phase 2 — Interactive City Map) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 
   <!-- Main JavaScript App -->
   <script type="module" src="js/app.js"></script>
