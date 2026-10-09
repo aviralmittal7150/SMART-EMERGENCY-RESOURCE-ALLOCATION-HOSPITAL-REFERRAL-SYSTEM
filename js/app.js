@@ -3,12 +3,49 @@ import { TRIAGE_LEVELS, EMERGENCY_PRESETS, comparePriority } from './triage.js';
 import { rankHospitals, DEFAULT_WEIGHTS } from './ranking.js';
 import { LockManager } from './locking.js';
 import { BankersAlgorithm } from './bankers.js';
+import {
+  SYMPTOM_DATABASE,
+  ROADSIDE_HOTSPOTS,
+  analyzeRoadsideSymptoms,
+  updateHospitalDistances,
+  calculateHaversineDistance,
+  generateHospitalRecommendationReason
+} from './symptom_triage.js';
+import {
+  AuthAPI,
+  HospitalsAPI,
+  EmergenciesAPI,
+  ReferralsAPI,
+  DoctorsAPI,
+  AmbulancesAPI,
+  AnalyticsAPI,
+  initWebSocket,
+  checkServerHealth
+} from './api.js';
+
+// Seed Doctors for UI Registry (Phase 2 P2-07)
+const initialDoctorsList = [
+  { doctor_id: 'DR-001', hospital_id: 'H-101', full_name: 'Dr. Arjun Mehta', specialization: 'CARDIOLOGIST', availability_status: 'AVAILABLE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-002', hospital_id: 'H-101', full_name: 'Dr. Priya Sharma', specialization: 'NEUROLOGIST', availability_status: 'IN_PROCEDURE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-003', hospital_id: 'H-101', full_name: 'Dr. Kabir Singh', specialization: 'TRAUMA_SURGEON', availability_status: 'AVAILABLE', shift_start: '20:00', shift_end: '08:00' },
+  { doctor_id: 'DR-004', hospital_id: 'H-101', full_name: 'Dr. Nisha Patel', specialization: 'PEDIATRICIAN', availability_status: 'AVAILABLE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-005', hospital_id: 'H-102', full_name: 'Dr. Rajan Verma', specialization: 'TRAUMA_SURGEON', availability_status: 'AVAILABLE', shift_start: '09:00', shift_end: '21:00' },
+  { doctor_id: 'DR-006', hospital_id: 'H-103', full_name: 'Dr. Suresh Iyer', specialization: 'CARDIOLOGIST', availability_status: 'AVAILABLE', shift_start: '07:00', shift_end: '19:00' },
+  { doctor_id: 'DR-007', hospital_id: 'H-103', full_name: 'Dr. Anika Bose', specialization: 'NEUROLOGIST', availability_status: 'AVAILABLE', shift_start: '07:00', shift_end: '19:00' },
+  { doctor_id: 'DR-008', hospital_id: 'H-103', full_name: 'Dr. Yusuf Khan', specialization: 'TRAUMA_SURGEON', availability_status: 'AVAILABLE', shift_start: '07:00', shift_end: '19:00' },
+  { doctor_id: 'DR-009', hospital_id: 'H-103', full_name: 'Dr. Sunita Rao', specialization: 'PEDIATRICIAN', availability_status: 'OFF_DUTY', shift_start: '19:00', shift_end: '07:00' },
+  { doctor_id: 'DR-010', hospital_id: 'H-104', full_name: 'Dr. Meera Krishnan', specialization: 'PEDIATRICIAN', availability_status: 'AVAILABLE', shift_start: '09:00', shift_end: '21:00' },
+  { doctor_id: 'DR-011', hospital_id: 'H-105', full_name: 'Dr. Vikram Joshi', specialization: 'CARDIOLOGIST', availability_status: 'AVAILABLE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-012', hospital_id: 'H-105', full_name: 'Dr. Deepa Nair', specialization: 'NEUROLOGIST', availability_status: 'IN_PROCEDURE', shift_start: '08:00', shift_end: '20:00' },
+  { doctor_id: 'DR-013', hospital_id: 'H-105', full_name: 'Dr. Rohan Gupta', specialization: 'TRAUMA_SURGEON', availability_status: 'AVAILABLE', shift_start: '08:00', shift_end: '20:00' }
+];
 
 // Global Application State
 const state = {
   hospitals: JSON.parse(JSON.stringify(initialHospitals)),
   ambulances: JSON.parse(JSON.stringify(initialAmbulances)),
   emergencyQueue: JSON.parse(JSON.stringify(initialEmergencyQueue)),
+  doctors: JSON.parse(JSON.stringify(initialDoctorsList)),
   selectedTriage: 1,
   selectedEmergencyType: "CARDIAC",
   customRequirements: {
@@ -18,7 +55,23 @@ const state = {
     specialist: "cardiologist"
   },
   currentActiveReferral: null,
-  activeTab: "tab-ingestion"
+  activeTab: "tab-ingestion",
+  currentUserRole: "admin",
+  roadside: {
+    currentLocation: ROADSIDE_HOTSPOTS[0],
+    selectedSymptomIds: ["unconscious", "severe_head_injury", "crushed_limb_fracture"],
+    symptomText: "Motorcycle crash on Highway 44. Rider unconscious, bleeding from head, compound fracture on leg.",
+    isListening: false,
+    recognition: null,
+    lastAnalysis: null,
+    lastRanked: []
+  },
+  mapInstance: null,
+  mapMarkers: {
+    hospitals: [],
+    ambulances: [],
+    roadside: []
+  }
 };
 
 // Initialize Modules
@@ -30,6 +83,7 @@ const lockManager = new LockManager((lockState) => {
 
 // DOMContentLoaded
 document.addEventListener("DOMContentLoaded", () => {
+  initTheme();
   initNavbarTabs();
   initClock();
   initTriageSelector();
@@ -41,7 +95,68 @@ document.addEventListener("DOMContentLoaded", () => {
   renderRankingResults();
   renderAmbulanceFleet();
   attachFormListeners();
+  initRoadsideAssist();
+  initAuthPortalModal();
+  initDoctorsScheduler();
+  initRealtimeBackendBridge();
 });
+
+// Theme Toggle Engine (Dark / Light Mode)
+function initTheme() {
+  const toggleBtn = document.getElementById("themeToggleBtn");
+  const toggleIcon = document.getElementById("themeToggleIcon");
+  const toggleText = document.getElementById("themeToggleText");
+
+  // Read saved preference or system preference
+  const savedTheme = localStorage.getItem("ser_theme");
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const initialTheme = savedTheme || (prefersDark ? "dark" : "light");
+
+  applyTheme(initialTheme, false);
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      const activeTheme = document.documentElement.getAttribute("data-theme") || "light";
+      const nextTheme = activeTheme === "dark" ? "light" : "dark";
+      applyTheme(nextTheme, true);
+    });
+  }
+
+  // Follow system theme changes if user hasn't explicitly set a preference
+  if (window.matchMedia) {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+      if (!localStorage.getItem("ser_theme")) {
+        applyTheme(e.matches ? "dark" : "light", false);
+      }
+    });
+  }
+
+  function applyTheme(theme, notify = false) {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("ser_theme", theme);
+
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) {
+      metaTheme.setAttribute("content", theme === "dark" ? "#0B0F19" : "#F4F7FB");
+    }
+
+    if (toggleIcon && toggleText) {
+      if (theme === "dark") {
+        toggleIcon.textContent = "☀️";
+        toggleText.textContent = "Light";
+        if (toggleBtn) toggleBtn.setAttribute("title", "Switch to Light Mode");
+      } else {
+        toggleIcon.textContent = "🌙";
+        toggleText.textContent = "Dark";
+        if (toggleBtn) toggleBtn.setAttribute("title", "Switch to Dark Mode");
+      }
+    }
+
+    if (notify) {
+      showNotification(`Switched to ${theme === "dark" ? "Dark" : "Light"} Mode`, "normal");
+    }
+  }
+}
 
 // Navigation Tabs
 function initNavbarTabs() {
@@ -58,6 +173,7 @@ function initNavbarTabs() {
       if (targetPane) targetPane.classList.add("active");
 
       // Re-render views on tab switch
+      if (targetId === "tab-roadside") performRoadsideAnalysis();
       if (targetId === "tab-ranking") renderRankingResults();
       if (targetId === "tab-command") {
         renderKpiCards();
@@ -66,6 +182,8 @@ function initNavbarTabs() {
       if (targetId === "tab-acceptance") renderHospitalAcceptanceView();
       if (targetId === "tab-bankers") renderBankersView();
       if (targetId === "tab-ambulance") renderAmbulanceFleet();
+      if (targetId === "tab-map") renderLeafletMap();
+      if (targetId === "tab-doctors") renderDoctorsRoster();
     });
   });
 }
@@ -446,16 +564,25 @@ function renderEmergencyQueue() {
   tbody.innerHTML = "";
   state.emergencyQueue.forEach(item => {
     const tr = document.createElement("tr");
-    const triageBadgeColor = TRIAGE_LEVELS[item.priority]?.color || "var(--status-blue)";
+    const priorityBadgeClass = `badge-priority badge-p${item.priority}`;
+    const statusMap = {
+      'ALLOCATED': 'badge-allocated',
+      'WAITING': 'badge-waiting',
+      'MATCHING': 'badge-matching',
+      'IN_TREATMENT': 'badge-treatment',
+      'COMPLETED': 'badge-completed',
+      'NEW': 'badge-new'
+    };
+    const statusBadgeClass = statusMap[item.status] || 'badge-new';
 
     tr.innerHTML = `
-      <td style="font-family: var(--font-mono); font-weight: 700; color: var(--status-blue);">${item.requestId}</td>
-      <td><strong>${item.patientName}</strong> <span style="font-size: 0.75rem; color: var(--text-muted);">(${item.age}y)</span></td>
-      <td>${item.emergencyType}</td>
-      <td><span style="background: rgba(255,255,255,0.08); color: ${triageBadgeColor}; padding: 0.2rem 0.5rem; border-radius: var(--radius-sm); font-size: 0.75rem; font-weight: 700;">P${item.priority}</span></td>
-      <td><span class="badge-status ${item.status === 'ALLOCATED' ? 'badge-open' : item.status === 'WAITING' ? 'badge-limited' : 'badge-open'}">${item.status}</span></td>
-      <td style="font-size: 0.82rem;">${item.assignedHospital}</td>
-      <td style="font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted);">${item.requestTime}</td>
+      <td style="font-family: var(--font-mono); font-weight: 700; color: var(--accent); font-size: 0.8rem;">${item.requestId}</td>
+      <td><strong style="color: var(--text-heading);">${item.patientName}</strong> <span style="font-size: 0.75rem; color: var(--text-muted);">(${item.age}y)</span></td>
+      <td style="font-size: 0.84rem;">${item.emergencyType}</td>
+      <td><span class="${priorityBadgeClass}">P${item.priority}</span></td>
+      <td><span class="badge-status ${statusBadgeClass}">${item.status}</span></td>
+      <td style="font-size: 0.82rem; color: var(--text-secondary);">${item.assignedHospital}</td>
+      <td style="font-family: var(--font-mono); font-size: 0.775rem; color: var(--text-muted);">${item.requestTime}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -620,15 +747,990 @@ function showNotification(msg, type = "normal") {
 
   banner.textContent = msg;
   banner.style.display = "block";
-  banner.className = "anim-notif";
-  banner.style.background = type === "urgent"
-    ? "rgba(255, 69, 58, 0.92)"
-    : type === "success"
-      ? "rgba(48, 209, 88, 0.92)"
-      : "rgba(10, 132, 255, 0.92)";
+  banner.className = "toast-enter";
+
+  const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+
+  if (type === "urgent") {
+    banner.style.background  = isDark ? "#DC2626" : "#DC2626";
+    banner.style.color       = "#FFFFFF";
+    banner.style.border      = "1px solid #B91C1C";
+    banner.style.boxShadow   = isDark ? "0 8px 24px rgba(0,0,0,0.5)" : "0 8px 24px rgba(220,38,38,0.25)";
+  } else if (type === "success") {
+    banner.style.background  = isDark ? "#059669" : "#16A34A";
+    banner.style.color       = "#FFFFFF";
+    banner.style.border      = isDark ? "1px solid #047857" : "1px solid #15803D";
+    banner.style.boxShadow   = isDark ? "0 8px 24px rgba(0,0,0,0.5)" : "0 8px 24px rgba(22,163,74,0.25)";
+  } else {
+    banner.style.background  = isDark ? "#1E293B" : "#0F2747";
+    banner.style.color       = "#FFFFFF";
+    banner.style.border      = isDark ? "1px solid #334155" : "1px solid #1E3A5F";
+    banner.style.boxShadow   = isDark ? "0 8px 24px rgba(0,0,0,0.5)" : "0 8px 24px rgba(15,39,71,0.18)";
+  }
 
   setTimeout(() => {
     banner.style.display = "none";
     banner.className = "";
   }, 6000);
 }
+
+/* ====================================================================
+   ROADSIDE ACCIDENT & VOICE SYMPTOM TRIAGE MODULE
+   "Just tell or select symptoms from the road accident scene"
+   ==================================================================== */
+
+function initRoadsideAssist() {
+  // 1. Populate Roadside Location Selector
+  const locSelect = document.getElementById("roadsideLocationSelect");
+  if (locSelect) {
+    locSelect.innerHTML = "";
+    ROADSIDE_HOTSPOTS.forEach((spot, idx) => {
+      const opt = document.createElement("option");
+      opt.value = spot.id;
+      opt.textContent = `${spot.name} (${spot.landmark})`;
+      if (idx === 0) opt.selected = true;
+      locSelect.appendChild(opt);
+    });
+
+    locSelect.addEventListener("change", (e) => {
+      const chosen = ROADSIDE_HOTSPOTS.find(s => s.id === e.target.value);
+      if (chosen) {
+        state.roadside.currentLocation = chosen;
+        const label = document.getElementById("roadsideCurrentLocLabel");
+        if (label) label.textContent = `${chosen.name} - ${chosen.address}`;
+        showNotification(`📍 Roadside position set to: ${chosen.name}`, "normal");
+        performRoadsideAnalysis();
+      }
+    });
+  }
+
+  // 2. Real Device GPS Button
+  const btnGps = document.getElementById("btnUseGpsLocation");
+  if (btnGps) {
+    btnGps.addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        showNotification("⚠️ Geolocation is not supported by your browser. Using simulated road hotspot.", "urgent");
+        return;
+      }
+      showNotification("📡 Acquiring device GPS satellite fix...", "normal");
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = Math.round(pos.coords.latitude * 10000) / 10000;
+          const lng = Math.round(pos.coords.longitude * 10000) / 10000;
+          state.roadside.currentLocation = {
+            id: "GPS_LIVE",
+            name: `Live Device Road Coordinates (${lat}, ${lng})`,
+            address: `Current Road Position (Accuracy: ±${Math.round(pos.coords.accuracy)}m)`,
+            lat,
+            lng,
+            landmark: "Current Road Point"
+          };
+          const label = document.getElementById("roadsideCurrentLocLabel");
+          if (label) label.textContent = state.roadside.currentLocation.name;
+          showNotification(`✅ Roadside GPS locked at [${lat}, ${lng}]. Real-time hospital distances updated!`, "success");
+          performRoadsideAnalysis();
+        },
+        (err) => {
+          showNotification(`⚠️ GPS fix unavailable (${err.message}). Defaulted to Highway 44 Expressway Hotspot.`, "normal");
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    });
+  }
+
+  // 3. Render Quick Roadside Symptom Tags
+  const tagsGrid = document.getElementById("roadsideTagsGrid");
+  if (tagsGrid) {
+    tagsGrid.innerHTML = "";
+    SYMPTOM_DATABASE.forEach(symptom => {
+      const tag = document.createElement("button");
+      tag.type = "button";
+      tag.className = `roadside-tag ${state.roadside.selectedSymptomIds.includes(symptom.id) ? "selected" : ""}`;
+      tag.setAttribute("data-symptom-id", symptom.id);
+      tag.innerHTML = symptom.label;
+      tag.addEventListener("click", () => {
+        tag.classList.toggle("selected");
+        const id = symptom.id;
+        if (state.roadside.selectedSymptomIds.includes(id)) {
+          state.roadside.selectedSymptomIds = state.roadside.selectedSymptomIds.filter(x => x !== id);
+        } else {
+          state.roadside.selectedSymptomIds.push(id);
+        }
+        performRoadsideAnalysis();
+      });
+      tagsGrid.appendChild(tag);
+    });
+  }
+
+  // 4. Voice Speech Recognition Setup
+  const micBtn = document.getElementById("roadsideMicBtn");
+  const micStatus = document.getElementById("roadsideMicStatus");
+  const soundwaves = document.getElementById("roadsideSoundwaves");
+  const symptomText = document.getElementById("roadsideSymptomText");
+
+  if (symptomText) {
+    symptomText.value = state.roadside.symptomText;
+    symptomText.addEventListener("input", (e) => {
+      state.roadside.symptomText = e.target.value;
+      performRoadsideAnalysis();
+    });
+  }
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognition) {
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    recognition.onstart = () => {
+      state.roadside.isListening = true;
+      if (micBtn) micBtn.classList.add("recording");
+      if (micStatus) micStatus.textContent = "🔴 Listening... Speak observed accident symptoms now!";
+      if (soundwaves) soundwaves.classList.add("active");
+    };
+
+    recognition.onresult = (event) => {
+      let interimTranscript = "";
+      let finalTranscript = "";
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          interimTranscript += event.results[i][0].transcript;
+        }
+      }
+      const combined = (finalTranscript || interimTranscript).trim();
+      if (combined && symptomText) {
+        symptomText.value = combined;
+        state.roadside.symptomText = combined;
+        performRoadsideAnalysis();
+      }
+    };
+
+    recognition.onerror = (event) => {
+      state.roadside.isListening = false;
+      if (micBtn) micBtn.classList.remove("recording");
+      if (soundwaves) soundwaves.classList.remove("active");
+      if (micStatus) micStatus.textContent = "Tap microphone & tell what you see";
+      if (event.error !== "no-speech") {
+        showNotification(`🎙️ Speech recognition alert: ${event.error}`, "normal");
+      }
+    };
+
+    recognition.onend = () => {
+      state.roadside.isListening = false;
+      if (micBtn) micBtn.classList.remove("recording");
+      if (soundwaves) soundwaves.classList.remove("active");
+      if (micStatus) micStatus.textContent = "Tap microphone & tell what you see";
+      performRoadsideAnalysis();
+    };
+
+    state.roadside.recognition = recognition;
+
+    if (micBtn) {
+      micBtn.addEventListener("click", () => {
+        if (state.roadside.isListening) {
+          recognition.stop();
+        } else {
+          try {
+            recognition.start();
+          } catch (err) {
+            recognition.stop();
+          }
+        }
+      });
+    }
+  } else {
+    if (micBtn) {
+      micBtn.addEventListener("click", () => {
+        showNotification("🎙️ Web Speech Recognition is not supported in this browser. Please type symptoms or use the instant test scenarios below.", "normal");
+      });
+    }
+  }
+
+  // 5. Preset Scenario Buttons
+  const scenarioPresets = {
+    motorcycle: {
+      text: "Motorcycle collision at highway speed. Rider is unconscious, bleeding heavily from head, compound fracture on leg with bone exposed.",
+      tags: ["unconscious", "severe_head_injury", "crushed_limb_fracture", "arterial_bleeding"]
+    },
+    car_chest: {
+      text: "Car crash into highway concrete barrier. Airbag deployed, driver had steering wheel impact with severe chest pain and gasping for breath.",
+      tags: ["chest_impact", "respiratory_arrest"]
+    },
+    pedestrian: {
+      text: "Pedestrian struck by speeding bus on outer road. Deep open leg wound with heavy spurting arterial bleeding, dazed and disoriented.",
+      tags: ["arterial_bleeding", "unconscious"]
+    },
+    bike_fracture: {
+      text: "Bicycle fall on roadside shoulder. Compound fracture on right forearm, severe arm pain, conscious and responsive.",
+      tags: ["crushed_limb_fracture"]
+    }
+  };
+
+  document.querySelectorAll(".scenario-pill").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const type = btn.getAttribute("data-scenario");
+      const preset = scenarioPresets[type];
+      if (preset) {
+        state.roadside.symptomText = preset.text;
+        state.roadside.selectedSymptomIds = [...preset.tags];
+        if (symptomText) symptomText.value = preset.text;
+        // Update tags UI
+        document.querySelectorAll(".roadside-tag").forEach(tag => {
+          const id = tag.getAttribute("data-symptom-id");
+          if (preset.tags.includes(id)) {
+            tag.classList.add("selected");
+          } else {
+            tag.classList.remove("selected");
+          }
+        });
+        showNotification(`⚡ Loaded test scenario: ${btn.textContent.trim()}`, "normal");
+        performRoadsideAnalysis();
+      }
+    });
+  });
+
+  // 6. Manual Analyze Button
+  const btnAnalyze = document.getElementById("btnAnalyzeRoadside");
+  if (btnAnalyze) {
+    btnAnalyze.addEventListener("click", () => {
+      performRoadsideAnalysis();
+      showNotification("🎯 Analyzed symptoms and updated roadside hospital recommendations!", "success");
+    });
+  }
+
+  // 7. Intake Tab CTA Banner
+  const ctaBanner = document.getElementById("btnJumpToRoadside");
+  if (ctaBanner) {
+    ctaBanner.addEventListener("click", () => {
+      triggerTabSwitch("tab-roadside");
+    });
+  }
+
+  // 8. Navigation Modal Close
+  const closeRouteBtn = document.getElementById("closeRouteModalBtn");
+  const routeModal = document.getElementById("routeDirectionsModal");
+  if (closeRouteBtn && routeModal) {
+    closeRouteBtn.addEventListener("click", () => {
+      routeModal.style.display = "none";
+    });
+    routeModal.addEventListener("click", (e) => {
+      if (e.target === routeModal) routeModal.style.display = "none";
+    });
+  }
+
+  // Initial trigger
+  performRoadsideAnalysis();
+}
+
+function performRoadsideAnalysis() {
+  const text = state.roadside.symptomText || document.getElementById("roadsideSymptomText")?.value || "";
+  const selectedIds = state.roadside.selectedSymptomIds || [];
+  const loc = state.roadside.currentLocation;
+
+  // 1. Analyze symptoms
+  const analysis = analyzeRoadsideSymptoms(text, selectedIds);
+  state.roadside.lastAnalysis = analysis;
+
+  // 2. Update hospital distances based on current road location
+  const updatedHospitals = updateHospitalDistances(state.hospitals, loc.lat, loc.lng);
+
+  // 3. Rank hospitals against required resources
+  const ranked = rankHospitals(updatedHospitals, analysis.requiredResources, DEFAULT_WEIGHTS);
+  state.roadside.lastRanked = ranked;
+
+  // 4. Update AI Triage Panel in UI
+  const triageBadge = document.getElementById("roadsideTriageBadge");
+  if (triageBadge) {
+    triageBadge.textContent = analysis.triageName;
+    triageBadge.style.color = analysis.triageColor;
+  }
+
+  const preemptTag = document.getElementById("roadsidePreemptTag");
+  if (preemptTag) {
+    if (analysis.triageLevel <= 2) {
+      preemptTag.style.display = "inline-flex";
+      preemptTag.innerHTML = "⚡ OS Preemptive Scheduling Lock";
+    } else {
+      preemptTag.style.display = "inline-flex";
+      preemptTag.innerHTML = "⏱️ Standard Priority Queue";
+    }
+  }
+
+  const emergencyTitle = document.getElementById("roadsideEmergencyTitle");
+  if (emergencyTitle) {
+    emergencyTitle.innerHTML = `Emergency Category: <strong style="color: #fff;">${analysis.emergencyTitle}</strong>`;
+  }
+
+  const rationaleEl = document.getElementById("roadsideTriageRationale");
+  if (rationaleEl) {
+    rationaleEl.textContent = analysis.triageSummary;
+  }
+
+  // Required resources capsules
+  const resGrid = document.getElementById("roadsideRequiredResourcesGrid");
+  if (resGrid) {
+    const reqs = analysis.requiredResources;
+    resGrid.innerHTML = `
+      <div class="resource-capsule">
+        <span class="capsule-label">ICU Bed</span>
+        <span class="capsule-val ${reqs.requiredBeds ? 'good' : 'empty'}">${reqs.requiredBeds ? 'REQUIRED' : 'Optional'}</span>
+      </div>
+      <div class="resource-capsule">
+        <span class="capsule-label">Ventilator</span>
+        <span class="capsule-val ${reqs.requiredVents ? 'good' : 'empty'}">${reqs.requiredVents ? 'REQUIRED' : 'Optional'}</span>
+      </div>
+      <div class="resource-capsule">
+        <span class="capsule-label">Emergency OT</span>
+        <span class="capsule-val ${reqs.requiredOT ? 'good' : 'empty'}">${reqs.requiredOT ? 'REQUIRED' : 'Optional'}</span>
+      </div>
+      <div class="resource-capsule">
+        <span class="capsule-label">Specialist</span>
+        <span class="capsule-val ${reqs.specialist ? 'good' : 'empty'}">${reqs.specialist ? reqs.specialist.toUpperCase() : 'General ER'}</span>
+      </div>
+    `;
+  }
+
+  // First aid steps
+  const firstAidList = document.getElementById("roadsideFirstAidList");
+  if (firstAidList) {
+    firstAidList.innerHTML = analysis.firstAidSteps.map(step => `<li>${step}</li>`).join("");
+  }
+
+  // 5. Render Recommendation Hero Card
+  renderRoadsideHospitalRecommendation(ranked, analysis);
+}
+
+function renderRoadsideHospitalRecommendation(ranked, analysis) {
+  const container = document.getElementById("roadsideRecommendationContainer");
+  if (!container) return;
+
+  const topHospital = ranked.find(h => h.isEligible);
+  const reason = generateHospitalRecommendationReason(topHospital, ranked, analysis.requiredResources);
+
+  if (!topHospital) {
+    container.innerHTML = `
+      <div class="panel" style="text-align: center; padding: 2.5rem 1rem; border-color: var(--status-red);">
+        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🚨</div>
+        <h3 style="color: var(--status-red);">No Regional Hospital Currently Meets Critical Life-Saving Constraints</h3>
+        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.5rem;">
+          All regional facilities have exhausted their ICU beds, ventilators, or lack the on-duty surgical specialist for this accident.
+        </p>
+        <button class="btn btn-primary" style="margin-top: 1rem;" onclick="alert('Contacting Central EMS Disaster Command for inter-region airlift...')">
+          📞 Request Central Air-Ambulance Evacuation
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  const specName = analysis.requiredResources.specialist
+    ? (analysis.requiredResources.specialist === "traumaSurgeon" ? "Trauma Surgeon" : analysis.requiredResources.specialist === "neurologist" ? "Neurologist" : analysis.requiredResources.specialist === "cardiologist" ? "Cardiologist" : "Pediatrician")
+    : null;
+
+  const hasSpecialist = specName ? topHospital.resources.specialists[analysis.requiredResources.specialist] : true;
+
+  container.innerHTML = `
+    <!-- 🏆 HERO RECOMMENDED HOSPITAL CARD -->
+    <div class="hero-recommendation-card">
+      <div class="hero-rec-header">
+        <div>
+          <div class="hero-rec-badge">
+            <span>🏆</span> #1 RECOMMENDED HOSPITAL FOR THIS ACCIDENT
+          </div>
+          <div class="hero-hosp-title">${topHospital.name}</div>
+          <div style="font-size: 0.82rem; color: var(--text-tertiary); margin-top: 0.25rem;">
+            📍 ${topHospital.address} • <strong>${topHospital.traumaLevel || 'Major Emergency Facility'}</strong> • ⭐ ${topHospital.rating}/5.0
+          </div>
+        </div>
+        <div class="hero-eta-pill">
+          <span>⏱️</span>
+          <span><strong>${topHospital.distanceKm} km</strong> (~${topHospital.estDriveMins || Math.round(topHospital.distanceKm * 2.2 + 2)} mins drive)</span>
+        </div>
+      </div>
+
+      <!-- Real-Time Resource Verification Capsules -->
+      <div class="resource-capsule-grid">
+        <div class="resource-capsule">
+          <span class="capsule-label">ICU Beds</span>
+          <span class="capsule-val ${topHospital.resources.icuBeds.available > 0 ? 'good' : 'empty'}">
+            🟢 ${topHospital.resources.icuBeds.available} Available (Ready)
+          </span>
+        </div>
+        <div class="resource-capsule">
+          <span class="capsule-label">Emergency OT</span>
+          <span class="capsule-val ${topHospital.resources.emergencyOT.available > 0 ? 'good' : 'empty'}">
+            🟢 ${topHospital.resources.emergencyOT.available} Open Theatres
+          </span>
+        </div>
+        <div class="resource-capsule">
+          <span class="capsule-label">Ventilators</span>
+          <span class="capsule-val ${topHospital.resources.ventilators.available > 0 ? 'good' : 'empty'}">
+            🟢 ${topHospital.resources.ventilators.available} Available
+          </span>
+        </div>
+        <div class="resource-capsule">
+          <span class="capsule-label">${specName || 'Specialist'}</span>
+          <span class="capsule-val ${hasSpecialist ? 'good' : 'empty'}">
+            ${hasSpecialist ? '🟢 ON DUTY' : '❌ Not Available'}
+          </span>
+        </div>
+      </div>
+
+      <!-- Clinical Decision Transparency Box -->
+      <div class="rec-reason-box">
+        <div style="font-weight: 700; color: var(--accent-cyan); margin-bottom: 0.35rem; display: flex; align-items: center; gap: 0.4rem;">
+          <span>🧠</span> Why Visit This Hospital? (Clinical & Operational Resource Fit)
+        </div>
+        <div>${reason.details}</div>
+      </div>
+
+      <!-- One-Touch Roadside Action Buttons -->
+      <div class="roadside-action-grid">
+        <button id="btnRoadsideNavigate" class="btn btn-primary" style="padding: 0.85rem; font-size: 0.9rem;">
+          🧭 Turn-by-Turn GPS Navigation
+        </button>
+        <button id="btnRoadsidePreAlert" class="btn btn-cyan" style="padding: 0.85rem; font-size: 0.9rem;">
+          🚨 Pre-Alert Hospital ER (1-Click)
+        </button>
+        <button id="btnRoadsideDispatchEMS" class="btn btn-accent" style="padding: 0.85rem; font-size: 0.9rem;">
+          🚑 Dispatch Closest EMS Ambulance
+        </button>
+        <a href="tel:${topHospital.phone || '108'}" id="btnRoadsideCallHospital" class="btn btn-secondary" style="padding: 0.85rem; font-size: 0.9rem; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 0.4rem;">
+          📞 Direct ER: ${topHospital.phone || '108'}
+        </a>
+      </div>
+    </div>
+
+    <!-- Other Regional Hospitals Comparison Grid -->
+    <div class="panel" style="margin-top: 1.5rem;">
+      <div class="panel-header">
+        <span class="panel-title">🏥 Regional Hospitals Comparison Matrix</span>
+        <span class="panel-badge">Distance From Road: ${state.roadside.currentLocation.name.split('(')[0].trim()}</span>
+      </div>
+      <div class="grid-3col">
+        ${ranked.slice(1).map((h, i) => {
+          const isEligible = h.isEligible;
+          return `
+            <div class="hospital-card" style="${!isEligible ? 'opacity: 0.75; border-color: rgba(244, 63, 94, 0.25);' : ''}">
+              <div class="hospital-header">
+                <div>
+                  <div class="hospital-name">
+                    <span class="rank-badge">#${i + 2}</span>
+                    <span>${h.name}</span>
+                  </div>
+                  <div style="font-size: 0.72rem; color: var(--text-tertiary);">
+                    📍 ${h.distanceKm} km away (~${h.estDriveMins || Math.round(h.distanceKm * 2.2 + 2)} mins)
+                  </div>
+                </div>
+                <div class="score-badge">
+                  ${isEligible ? `<span>${h.suitabilityScore}</span>` : `<span style="color: var(--status-red); font-size: 0.75rem;">EXCLUDED</span>`}
+                </div>
+              </div>
+              <div class="resource-capsule-grid" style="margin-top: 0.5rem;">
+                <div class="resource-capsule">
+                  <span class="capsule-label">ICU</span>
+                  <span class="capsule-val ${h.resources.icuBeds.available > 0 ? 'good' : 'empty'}">${h.resources.icuBeds.available}/${h.resources.icuBeds.total}</span>
+                </div>
+                <div class="resource-capsule">
+                  <span class="capsule-label">OT</span>
+                  <span class="capsule-val ${h.resources.emergencyOT.available > 0 ? 'good' : 'empty'}">${h.resources.emergencyOT.available}/${h.resources.emergencyOT.total}</span>
+                </div>
+              </div>
+              ${!isEligible ? `
+                <div style="margin-top: 0.5rem; font-size: 0.72rem; color: #fca5a5; background: rgba(244, 63, 94, 0.1); padding: 0.35rem 0.5rem; border-radius: var(--radius-sm);">
+                  ❌ ${h.exclusionReason}
+                </div>
+              ` : `
+                <div style="margin-top: 0.5rem; font-size: 0.72rem; color: var(--text-tertiary);">
+                  Suitability Fit: ${h.suitabilityScore}/100
+                </div>
+              `}
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+
+  // Attach Roadside Action Handlers
+  document.getElementById("btnRoadsideNavigate")?.addEventListener("click", () => {
+    openRouteNavigationModal(topHospital);
+  });
+
+  document.getElementById("btnRoadsidePreAlert")?.addEventListener("click", () => {
+    // 1-Click Pre-Alert ER: Creates an active emergency request, locks soft-reservation, and notifies hospital!
+    const newReqId = `REQ-${Math.floor(1000 + Math.random() * 9000)}`;
+    const newRequest = {
+      requestId: newReqId,
+      patientName: "Roadside Accident Victim",
+      age: 35,
+      emergencyType: analysis.emergencyType,
+      priority: analysis.triageLevel,
+      priorityName: analysis.triageName,
+      status: "WAITING",
+      assignedHospital: topHospital.name,
+      requestTime: new Date().toLocaleTimeString(),
+      requiredResources: Object.keys(analysis.requiredResources).filter(k => analysis.requiredResources[k]),
+      notes: `Roadside Ingestion from ${state.roadside.currentLocation.name}. Symptoms: ${state.roadside.symptomText}`
+    };
+
+    state.emergencyQueue.unshift(newRequest);
+    state.emergencyQueue.sort(comparePriority);
+
+    initiateReferralLock(topHospital);
+    showNotification(`🚨 1-Click ER Pre-Alert Transmitted to ${topHospital.name}! Trauma scrub team alerted. Soft lock active!`, "urgent");
+  });
+
+  document.getElementById("btnRoadsideDispatchEMS")?.addEventListener("click", () => {
+    const availableAmb = state.ambulances.find(a => a.status === "AVAILABLE") || state.ambulances[0];
+    if (availableAmb) {
+      availableAmb.status = "IN_TRANSIT";
+      availableAmb.etaMins = Math.max(3, Math.round(topHospital.distanceKm * 1.5));
+      renderAmbulanceFleet();
+      renderKpiCards();
+      showNotification(`🚑 Ambulance ${availableAmb.id} (${availableAmb.type}) dispatched to ${state.roadside.currentLocation.name}! ETA: ${availableAmb.etaMins} mins.`, "success");
+    }
+  });
+}
+
+function openRouteNavigationModal(hospital) {
+  const modal = document.getElementById("routeDirectionsModal");
+  const content = document.getElementById("routeModalContent");
+  if (!modal || !content) return;
+
+  const loc = state.roadside.currentLocation;
+  const driveMins = hospital.estDriveMins || Math.round(hospital.distanceKm * 2.2 + 2);
+
+  content.innerHTML = `
+    <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1.25rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <span style="font-weight: 700; color: #fff; font-size: 0.95rem;">🚦 Emergency Green Corridor Route</span>
+        <span style="font-weight: 800; color: var(--accent-cyan); font-family: var(--font-mono); font-size: 1.05rem;">
+          ${driveMins} MINS (${hospital.distanceKm} km)
+        </span>
+      </div>
+      <div style="font-size: 0.8rem; color: var(--text-secondary);">
+        <strong>From:</strong> ${loc.name} <br>
+        <strong>To:</strong> ${hospital.name} (${hospital.address})
+      </div>
+    </div>
+
+    <div style="margin-bottom: 1.25rem;">
+      <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; margin-bottom: 0.5rem;">
+        Turn-by-Turn Driving Directions:
+      </div>
+      <div class="route-step">
+        <div class="route-step-num">1</div>
+        <div>
+          <div style="font-weight: 700; color: #fff;">Head onto the main road toward Central Medical Corridor</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">Continue straight for 1.2 km with hazard lights on.</div>
+        </div>
+      </div>
+      <div class="route-step">
+        <div class="route-step-num">2</div>
+        <div>
+          <div style="font-weight: 700; color: #fff;">Take Highway Exit 8 towards ${hospital.address.split(',')[0]}</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">Dedicated emergency vehicle siren corridor active. (600m)</div>
+        </div>
+      </div>
+      <div class="route-step">
+        <div class="route-step-num">3</div>
+        <div>
+          <div style="font-weight: 700; color: #fff;">Turn Right into ${hospital.name} Emergency Trauma Bay</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">Follow red ER signs directly into the triage ambulance dock. (300m)</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 0.75rem;">
+      <a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(hospital.name + ' ' + hospital.address)}" target="_blank" rel="noopener" class="btn btn-primary btn-block" style="text-decoration: none; text-align: center; font-size: 0.9rem; padding: 0.75rem;">
+        🗺️ Launch Live in Google Maps
+      </a>
+      <button class="btn btn-secondary" onclick="document.getElementById('routeDirectionsModal').style.display='none'">
+        Close
+      </button>
+    </div>
+  `;
+
+  modal.style.display = "flex";
+}
+
+// System Role Switcher & Modal
+function initAuthPortalModal() {
+  const switchBtn = document.getElementById("switchPortalBtn");
+  const modal = document.getElementById("authPortalModal");
+  const closeBtn = document.getElementById("closeAuthModalBtn");
+
+  if (switchBtn && modal) {
+    switchBtn.addEventListener("click", () => {
+      modal.style.display = "flex";
+    });
+  }
+
+  if (closeBtn && modal) {
+    closeBtn.addEventListener("click", () => {
+      modal.style.display = "none";
+    });
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.style.display = "none";
+    });
+  }
+
+  // Role Tab Switching
+  const roleTabs = document.querySelectorAll(".role-tab-btn");
+  roleTabs.forEach(btn => {
+    btn.addEventListener("click", () => {
+      roleTabs.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      const role = btn.getAttribute("data-role-tab");
+      document.querySelectorAll(".role-pane").forEach(p => p.classList.remove("active"));
+
+      const targetPane = document.getElementById(`rolePane${role.charAt(0).toUpperCase() + role.slice(1)}`);
+      if (targetPane) targetPane.classList.add("active");
+    });
+  });
+
+  // Quick Demo Role Login Buttons
+  const setRole = (role, title, icon) => {
+    state.currentUserRole = role;
+    const roleTitle = document.getElementById("userRoleTitle");
+    const roleIcon = document.getElementById("userRoleIcon");
+    if (roleTitle) roleTitle.textContent = title;
+    if (roleIcon) roleIcon.textContent = icon;
+    if (modal) modal.style.display = "none";
+    showNotification(`🛡️ Switched active portal view to: ${title}`, "success");
+  };
+
+  document.getElementById("quickLoginAdmin")?.addEventListener("click", () => setRole("admin", "Admin Portal", "👑"));
+  document.getElementById("quickLoginFortis")?.addEventListener("click", () => setRole("hospital", "Fortis Desk Console", "🏥"));
+  document.getElementById("quickLoginApex")?.addEventListener("click", () => setRole("hospital", "Apex Desk Console", "🏥"));
+  document.getElementById("quickLoginEMS")?.addEventListener("click", () => setRole("paramedic", "Paramedic Dispatch Unit", "🚑"));
+}
+
+/* ====================================================================
+   PHASE 2: INTERACTIVE CITY GPS MAP (LEAFLET / OSM) — P2-06
+   Dynamic geospatial mapping of participating hospitals, bed capacity
+   heatmaps, moving ambulance markers, and roadside accident points.
+   ==================================================================== */
+
+function renderLeafletMap() {
+  const mapContainer = document.getElementById("leafletMapContainer");
+  if (!mapContainer || typeof L === "undefined") return;
+
+  const defaultCenter = [28.6300, 77.2180];
+
+  if (!state.mapInstance) {
+    state.mapInstance = L.map("leafletMapContainer").setView(defaultCenter, 13);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(state.mapInstance);
+
+    // Layer toggle events
+    document.getElementById("layerToggleHospitals")?.addEventListener("change", (e) => {
+      state.mapMarkers.hospitals.forEach(m => e.target.checked ? state.mapInstance.addLayer(m) : state.mapInstance.removeLayer(m));
+    });
+
+    document.getElementById("layerToggleAmbulances")?.addEventListener("change", (e) => {
+      state.mapMarkers.ambulances.forEach(m => e.target.checked ? state.mapInstance.addLayer(m) : state.mapInstance.removeLayer(m));
+    });
+
+    document.getElementById("layerToggleRoadside")?.addEventListener("change", (e) => {
+      state.mapMarkers.roadside.forEach(m => e.target.checked ? state.mapInstance.addLayer(m) : state.mapInstance.removeLayer(m));
+    });
+
+    document.getElementById("btnRecenterMap")?.addEventListener("click", () => {
+      state.mapInstance.setView(defaultCenter, 13);
+    });
+  } else {
+    // Invalidate map size so Leaflet recalculates dimensions when tab is revealed
+    setTimeout(() => state.mapInstance.invalidateSize(), 150);
+  }
+
+  // Clear existing markers
+  state.mapMarkers.hospitals.forEach(m => state.mapInstance.removeLayer(m));
+  state.mapMarkers.ambulances.forEach(m => state.mapInstance.removeLayer(m));
+  state.mapMarkers.roadside.forEach(m => state.mapInstance.removeLayer(m));
+
+  state.mapMarkers.hospitals = [];
+  state.mapMarkers.ambulances = [];
+  state.mapMarkers.roadside = [];
+
+  // 1. Render Hospital Markers with Capacity Heatmap Color
+  state.hospitals.forEach(h => {
+    if (!h.coordinates) return;
+    const icuAvail = h.resources?.icuBeds?.available ?? 0;
+    const icuTotal = h.resources?.icuBeds?.total ?? 1;
+    const ratio = icuAvail / icuTotal;
+
+    let markerColor = "#16a34a"; // Green (>= 20%)
+    if (h.status === "CLOSED" || icuAvail === 0) {
+      markerColor = "#dc2626"; // Red (Closed / 0 Beds)
+    } else if (ratio < 0.2) {
+      markerColor = "#d97706"; // Amber (< 20%)
+    }
+
+    const circle = L.circleMarker([h.coordinates.lat, h.coordinates.lng], {
+      radius: 12,
+      fillColor: markerColor,
+      color: "#ffffff",
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 0.85
+    });
+
+    const popupHtml = `
+      <div style="font-family: var(--font-main); min-width: 200px;">
+        <strong style="color: var(--text-heading); font-size: 0.9rem;">${h.name}</strong>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;">${h.address}</div>
+        <hr style="margin: 6px 0; border: 0; border-top: 1px solid #e2e8f0;">
+        <div style="font-size: 0.78rem;"><strong>Status:</strong> <span style="color: ${markerColor}; font-weight: 700;">${h.status}</span></div>
+        <div style="font-size: 0.78rem;"><strong>ICU Beds:</strong> ${icuAvail} / ${icuTotal} available</div>
+        <div style="font-size: 0.78rem;"><strong>Ventilators:</strong> ${h.resources?.ventilators?.available ?? 0} open</div>
+        <div style="font-size: 0.78rem;"><strong>Emergency OT:</strong> ${h.resources?.emergencyOT?.available ?? 0} theatres</div>
+        <div style="font-size: 0.78rem;"><strong>Rating:</strong> ⭐ ${h.rating}/5.0</div>
+      </div>
+    `;
+
+    circle.bindPopup(popupHtml);
+    circle.addTo(state.mapInstance);
+    state.mapMarkers.hospitals.push(circle);
+  });
+
+  // 2. Render EMS Ambulance Markers
+  const hospitalCoordMap = {
+    "H-101": [28.6300, 77.2180],
+    "H-102": [28.6420, 77.2250],
+    "H-103": [28.6050, 77.2020],
+    "H-104": [28.6380, 77.2220],
+    "H-105": [28.6520, 77.1650],
+    "H-106": [28.6310, 77.2320]
+  };
+
+  state.ambulances.forEach((amb, idx) => {
+    const base = hospitalCoordMap[amb.hospitalId] || defaultCenter;
+    // Slight offset for visual distinctness
+    const offsetLat = base[0] + (idx * 0.003 - 0.006);
+    const offsetLng = base[1] + (idx * 0.003 - 0.006);
+
+    const ambMarker = L.circleMarker([offsetLat, offsetLng], {
+      radius: 9,
+      fillColor: "#2563eb",
+      color: "#ffffff",
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 0.95
+    });
+
+    const popupHtml = `
+      <div style="font-family: var(--font-main);">
+        <strong style="color: #1e3a8a;">🚑 ${amb.id}</strong> (${amb.type})
+        <div style="font-size: 0.75rem; margin-top: 4px;"><strong>Station:</strong> ${amb.hospitalId}</div>
+        <div style="font-size: 0.75rem;"><strong>Status:</strong> <span style="font-weight: 700; color: #2563eb;">${amb.status}</span></div>
+        <div style="font-size: 0.75rem;"><strong>ETA:</strong> ${amb.etaMins ? `${amb.etaMins} mins` : 'Standby'}</div>
+      </div>
+    `;
+
+    ambMarker.bindPopup(popupHtml);
+    ambMarker.addTo(state.mapInstance);
+    state.mapMarkers.ambulances.push(ambMarker);
+  });
+
+  // 3. Render Roadside Incident Hotspot Markers
+  ROADSIDE_HOTSPOTS.forEach(spot => {
+    const spotMarker = L.circleMarker([spot.lat, spot.lng], {
+      radius: 10,
+      fillColor: "#f97316",
+      color: "#ffffff",
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 0.85
+    });
+
+    const popupHtml = `
+      <div style="font-family: var(--font-main);">
+        <strong style="color: #c2410c;">⚠️ ${spot.name}</strong>
+        <div style="font-size: 0.75rem; color: #475569; margin-top: 2px;">${spot.address}</div>
+        <div style="font-size: 0.75rem; margin-top: 4px;"><strong>Landmark:</strong> ${spot.landmark}</div>
+      </div>
+    `;
+
+    spotMarker.bindPopup(popupHtml);
+    spotMarker.addTo(state.mapInstance);
+    state.mapMarkers.roadside.push(spotMarker);
+  });
+}
+
+/* ====================================================================
+   PHASE 2: DOCTOR & SPECIALIST SHIFT SCHEDULER — P2-07
+   Live doctor roster management with availability status toggle,
+   specialization filter, shift timings, and new doctor registration.
+   ==================================================================== */
+
+function initDoctorsScheduler() {
+  const facilityFilter = document.getElementById("doctorFacilityFilter");
+  const specFilter = document.getElementById("doctorSpecFilter");
+  const statusFilter = document.getElementById("doctorStatusFilter");
+
+  [facilityFilter, specFilter, statusFilter].forEach(el => {
+    el?.addEventListener("change", () => renderDoctorsRoster());
+  });
+
+  // Modal open/close
+  const modal = document.getElementById("addDoctorModal");
+  const btnOpen = document.getElementById("btnOpenAddDoctorModal");
+  const btnClose = document.getElementById("closeDoctorModalBtn");
+
+  if (btnOpen && modal) {
+    btnOpen.addEventListener("click", () => modal.style.display = "flex");
+  }
+  if (btnClose && modal) {
+    btnClose.addEventListener("click", () => modal.style.display = "none");
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.style.display = "none";
+    });
+  }
+
+  // Add Doctor Form Submit
+  const addForm = document.getElementById("addDoctorForm");
+  if (addForm) {
+    addForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const hospId = document.getElementById("newDoctorHospital")?.value || "H-101";
+      const name = document.getElementById("newDoctorName")?.value?.trim() || "Dr. Anonymous";
+      const spec = document.getElementById("newDoctorSpec")?.value || "GENERAL_ER";
+      const start = document.getElementById("newDoctorShiftStart")?.value || "08:00";
+      const end = document.getElementById("newDoctorShiftEnd")?.value || "20:00";
+
+      const newDoc = {
+        doctor_id: `DR-${String(state.doctors.length + 1).padStart(3, '0')}`,
+        hospital_id: hospId,
+        full_name: name,
+        specialization: spec,
+        availability_status: "AVAILABLE",
+        shift_start: start,
+        shift_end: end
+      };
+
+      state.doctors.push(newDoc);
+      renderDoctorsRoster();
+      if (modal) modal.style.display = "none";
+      addForm.reset();
+      showNotification(`👨‍⚕️ Added ${newDoc.full_name} to ${hospId} emergency roster.`, "success");
+    });
+  }
+
+  renderDoctorsRoster();
+}
+
+function renderDoctorsRoster() {
+  const tbody = document.getElementById("doctorsTableBody");
+  if (!tbody) return;
+
+  const facilityFilter = document.getElementById("doctorFacilityFilter")?.value || "ALL";
+  const specFilter = document.getElementById("doctorSpecFilter")?.value || "ALL";
+  const statusFilter = document.getElementById("doctorStatusFilter")?.value || "ALL";
+
+  let filtered = [...state.doctors];
+
+  if (facilityFilter !== "ALL") filtered = filtered.filter(d => d.hospital_id === facilityFilter);
+  if (specFilter !== "ALL") filtered = filtered.filter(d => d.specialization === specFilter);
+  if (statusFilter !== "ALL") filtered = filtered.filter(d => d.availability_status === statusFilter);
+
+  tbody.innerHTML = "";
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No specialists match the selected criteria.</td></tr>`;
+    return;
+  }
+
+  const specLabelMap = {
+    "CARDIOLOGIST": "Interventional Cardiologist",
+    "NEUROLOGIST": "Neurosurgeon",
+    "TRAUMA_SURGEON": "Trauma Surgeon",
+    "PEDIATRICIAN": "Pediatrician",
+    "GENERAL_ER": "General ER Physician"
+  };
+
+  const hospNameMap = {
+    "H-101": "Apex City Trauma",
+    "H-102": "St. Jude Metro",
+    "H-103": "Fortis Cardiac & Neuro",
+    "H-104": "Memorial Healthcare",
+    "H-105": "Max Life Emergency",
+    "H-106": "Downtown Care (Closed)"
+  };
+
+  filtered.forEach(doc => {
+    const tr = document.createElement("tr");
+
+    let statusBadgeClass = "badge-open";
+    if (doc.availability_status === "IN_PROCEDURE") statusBadgeClass = "badge-limited";
+    if (doc.availability_status === "OFF_DUTY") statusBadgeClass = "badge-closed";
+
+    tr.innerHTML = `
+      <td style="font-family: var(--font-mono); font-weight: 700; color: var(--accent); font-size: 0.8rem;">${doc.doctor_id}</td>
+      <td><strong style="color: var(--text-heading);">${doc.full_name}</strong></td>
+      <td style="font-size: 0.82rem; color: var(--text-secondary);">${hospNameMap[doc.hospital_id] || doc.hospital_id}</td>
+      <td style="font-size: 0.82rem;">${specLabelMap[doc.specialization] || doc.specialization}</td>
+      <td style="font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted);">${doc.shift_start} - ${doc.shift_end}</td>
+      <td><span class="badge-status ${statusBadgeClass}">${doc.availability_status.replace('_', ' ')}</span></td>
+      <td>
+        <select class="form-select doc-status-selector" data-doc-id="${doc.doctor_id}" style="width: auto; padding: 0.2rem 0.5rem; font-size: 0.75rem;">
+          <option value="AVAILABLE" ${doc.availability_status === 'AVAILABLE' ? 'selected' : ''}>Available</option>
+          <option value="IN_PROCEDURE" ${doc.availability_status === 'IN_PROCEDURE' ? 'selected' : ''}>In Procedure</option>
+          <option value="OFF_DUTY" ${doc.availability_status === 'OFF_DUTY' ? 'selected' : ''}>Off Duty</option>
+        </select>
+      </td>
+    `;
+
+    tbody.appendChild(tr);
+  });
+
+  // Attach status toggle listener
+  document.querySelectorAll(".doc-status-selector").forEach(sel => {
+    sel.addEventListener("change", (e) => {
+      const docId = e.target.getAttribute("data-doc-id");
+      const targetDoc = state.doctors.find(d => d.doctor_id === docId);
+      if (targetDoc) {
+        targetDoc.availability_status = e.target.value;
+        renderDoctorsRoster();
+        showNotification(`👨‍⚕️ Updated ${targetDoc.full_name} status to ${e.target.value.replace('_', ' ')}.`, "normal");
+      }
+    });
+  });
+}
+
+/* ====================================================================
+   PHASE 2: REAL-TIME WEBSOCKET BACKEND BRIDGE (P2-04 / P2-08)
+   Attempts connection to Express/Socket.io backend if running,
+   enabling seamless live synchronization across browser clients.
+   ==================================================================== */
+
+function initRealtimeBackendBridge() {
+  checkServerHealth().then(health => {
+    if (health) {
+      console.log("[BRIDGE] Backend server detected online:", health);
+      showNotification(`🟢 Connected to Express.js REST API & WebSocket Server (v${health.version})`, "success");
+
+      initWebSocket(null, (eventType, data) => {
+        if (eventType === "referral:incoming") {
+          showNotification(`🚨 [WebSocket Alert] Incoming emergency referral for ${data.hospital_id}!`, "urgent");
+        } else if (eventType === "allocation:committed") {
+          showNotification(`🎉 [WebSocket Alert] Referral ${data.requestId} committed to ${data.hospitalId}!`, "success");
+        } else if (eventType === "lock:expired") {
+          showNotification(`⏱️ [WebSocket Alert] Referral timed out (90s). Automatic failover in progress.`, "urgent");
+        }
+      });
+    } else {
+      console.log("[BRIDGE] Operating in standalone browser mode with in-memory DBMS simulation.");
+    }
+  });
+}
+
+
