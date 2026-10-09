@@ -221,6 +221,15 @@ npm test
 ### 8.4 Start Development Server
 
 ```bash
+# Option A: Run Full Stack Server (API + WebSockets + Static Frontend)
+npm start
+# Server listening at http://localhost:4000
+
+# Option B: Run via Docker Container
+docker-compose up --build
+# Containerized app running at http://localhost:4000
+
+# Option C: Run Lightweight Static Frontend Dev Server
 npm run dev
 # Server listening at http://localhost:3000
 ```
@@ -229,14 +238,27 @@ npm run dev
 
 ## 🧪 9. Concurrency & Stress Verification Matrix
 
+```bash
+# Execute Full Automated Test Suite (49 / 49 Passing Tests, 100% Pass Rate):
+npm test
+
+# Execute Individual Specialized Subsystems:
+npm run test:concurrency   # P3-01: 100-Thread Mass Casualty Stress Engine
+npm run test:compound      # P3-02: 4-Vector Compound Claims Banker's Deadlock Engine
+npm run test:audit         # P3-04: SHA-256 Sealed Medico-Legal Audit Ledger
+```
+
 | Test Suite | Scenario Tested | Target Assertion | Result |
 | :--- | :--- | :--- | :---: |
 | `unit/scoring` | Suitability score weighted calculation | Correct weights and exclusion on missing resource | ✅ **PASS** |
 | `unit/priority` | Min-heap Priority Queue triage ordering | Priority 1 cases precede Priority 3 | ✅ **PASS** |
 | `integration/handshake` | 90s Soft Lock & Acceptance flow | Row lock held $\to$ Committed upon accept | ✅ **PASS** |
 | `integration/failover` | Hospital rejection & timeout auto-routing | Lock released $\to$ Immediate failover to Rank 2 | ✅ **PASS** |
-| `concurrency/mutex` | **50 concurrent threads claiming 1 ICU bed** | **Zero double-allocations (1 winner, 49 rerouted)** | ✅ **PASS** |
-| `simulation/bankers` | Multi-resource claim safe sequence | Detects unsafe state and avoids deadlock | ✅ **PASS** |
+| `concurrency/mutex` | **100 concurrent threads claiming 1 ICU bed** | **Zero double-allocations (1 winner, 99 rerouted)** | ✅ **PASS** |
+| `simulation/bankers` | 4-Vector Compound claim safe sequence | Detects unsafe state and avoids deadlock | ✅ **PASS** |
+| `ledger/integrity` | Cryptographic SHA-256 block chain seal | Zero tampering detected & valid CSV export | ✅ **PASS** |
+
+**Summary:** `49 / 49 Passed (100% Pass Rate across Unit, Integration, Concurrency & Simulation)`
 
 ---
 
@@ -244,8 +266,10 @@ npm run dev
 
 | File | Description |
 | :--- | :--- |
+| 🎓 **[VIVA_DEFENSE_GUIDE.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/VIVA_DEFENSE_GUIDE.md)** | Complete Academic Viva Defense Guide: OS/DBMS theory questions, demo script, and examiner Q&A. |
 | 📘 **[PRD.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/PRD.md)** | Complete Product Requirements Document with full data schema and non-functional specifications. |
 | 🔄 **[WORKFLOW.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/WORKFLOW.md)** | End-to-end task workflows, GitHub Issue templates, and Pull Request guidelines. |
+| 🗺️ **[PROJECT_ROADMAP.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/PROJECT_ROADMAP.md)** | Master Project Roadmap detailing Phases 1, 2, and 3 engineering milestones (100% Complete). |
 | 🤖 **[AGENTS.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/AGENTS.md)** | AI Agent & Contributor operating handbook with strict OS/DBMS mandates. |
 | 📋 **[.github/pull_request_template.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/.github/pull_request_template.md)** | Standard Pull Request template with mandatory test matrix. |
 

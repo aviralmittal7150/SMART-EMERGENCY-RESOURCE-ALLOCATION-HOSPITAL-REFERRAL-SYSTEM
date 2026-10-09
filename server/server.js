@@ -11,6 +11,12 @@ import morgan from 'morgan';
 import { rateLimit } from 'express-rate-limit';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.resolve(__dirname, '..');
 
 // Route Modules
 import authRoutes       from './routes/auth.js';
@@ -89,9 +95,20 @@ app.get('/health', (req, res) => {
   });
 });
 
-// ── 404 Handler ──
-app.use((req, res) => {
-  res.status(404).json({ error: `Endpoint not found: ${req.method} ${req.path}` });
+// ── Static Frontend Serving ──
+app.use(express.static(rootDir));
+
+// ── 404 Handler for API Routes ──
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.path}` });
+});
+
+// ── Fallback to index.html for Frontend Single Page Navigation ──
+app.use((req, res, next) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api')) {
+    return res.sendFile(path.join(rootDir, 'index.html'));
+  }
+  next();
 });
 
 // ── Global Error Handler ──

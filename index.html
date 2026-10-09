@@ -543,6 +543,90 @@
             <!-- Rendered by JS -->
           </div>
         </div>
+
+        <!-- P3-03: Emergency Analytics & Trend Forecasting Dashboard (Issue #26) -->
+        <div class="panel" style="margin-top: 1.25rem;">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">📈 Emergency Demand Forecasting & Bottleneck Analytics</span>
+              <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                Historical Intake Velocity, Peak Demand Hours, Hospital Rejection Bottlenecks & Response SLA Tracking
+              </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <select id="analyticsTimeRange" class="form-select" style="width: auto; font-size: 0.78rem; padding: 0.35rem 0.65rem;">
+                <option value="24h">Last 24 Hours</option>
+                <option value="7d">Last 7 Days</option>
+                <option value="30d">Last 30 Days</option>
+              </select>
+              <button id="btnExportAnalyticsCsv" class="btn btn-secondary btn-sm">
+                📥 Export CSV Report
+              </button>
+            </div>
+          </div>
+
+          <div class="grid-2col" style="gap: 1.25rem; margin-bottom: 1.25rem;">
+            <!-- Hourly Volume Distribution -->
+            <div style="background: var(--bg-muted); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <span style="font-weight: 700; font-size: 0.85rem; color: var(--text-heading);">⏰ Hourly Emergency Intake Velocity (24h Trend)</span>
+                <span style="font-size: 0.72rem; color: var(--status-red); font-weight: 700;">Peak: 22:00 - 02:00 (Highway Trauma)</span>
+              </div>
+              <div id="analyticsHourlyChart" style="display: flex; align-items: flex-end; gap: 6px; height: 130px; padding-top: 15px;">
+                <!-- Rendered dynamically -->
+              </div>
+            </div>
+
+            <!-- Hospital Rejection / Acceptance Bottleneck -->
+            <div style="background: var(--bg-muted); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <span style="font-weight: 700; font-size: 0.85rem; color: var(--text-heading);">⚡ Referral Acceptance vs Rejection by Facility</span>
+                <span style="font-size: 0.72rem; color: var(--accent); font-weight: 700;">Target SLA: &lt; 60s Latency</span>
+              </div>
+              <div id="analyticsBottleneckBars" style="display: flex; flex-direction: column; gap: 8px;">
+                <!-- Rendered dynamically -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- P3-04: Immutable Medico-Legal Audit Ledger Console (Issue #27) -->
+        <div class="panel" style="margin-top: 1.25rem;">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">🛡️ Cryptographically Sealed Medico-Legal Audit Ledger</span>
+              <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                Append-Only Tamper-Proof Event Log with SHA-256 Block Chain Hash Integrity Verification
+              </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <span id="auditIntegrityStatusBadge" class="badge-status badge-open" style="font-size: 0.75rem;">
+                VERIFIED: ZERO TAMPERING DETECTED
+              </span>
+              <button id="btnExportAuditLedgerCsv" class="btn btn-secondary btn-sm">
+                📜 Export Sealed Audit Trail
+              </button>
+            </div>
+          </div>
+
+          <div class="table-scroll" style="max-height: 280px;">
+            <table class="matrix-table">
+              <thead>
+                <tr>
+                  <th>Seq #</th>
+                  <th>Audit ID</th>
+                  <th>Timestamp (IST)</th>
+                  <th>Event Type</th>
+                  <th>Cryptographic Integrity Hash (SHA-256)</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="auditLedgerTableBody">
+                <!-- Rendered dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <!-- TAB 5: OS Banker's Algorithm Simulator -->
@@ -665,6 +749,106 @@
                 <!-- Safe Sequence Output -->
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- P3-02: Compound Multi-Resource Claims Engine (Issue #25) -->
+        <div class="panel" style="margin-top: 1.25rem;">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">🧩 Compound Multi-Resource Claim Tester (OS Deadlock Avoidance)</span>
+              <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                Simulates real-time multi-resource atomic claims. Proactively halts requests that would trigger circular wait.
+              </div>
+            </div>
+            <span class="panel-badge">Issue #25 / P3-02</span>
+          </div>
+
+          <div class="grid-2col" style="gap: 1.25rem; align-items: start;">
+            <div>
+              <div class="grid-2col" style="gap: 0.75rem; margin-bottom: 0.75rem;">
+                <div class="form-group">
+                  <label class="form-label">Requesting Process / Patient</label>
+                  <select id="compoundProcessSelect" class="form-select">
+                    <option value="0">P0 (Cardiac Patient)</option>
+                    <option value="1" selected>P1 (Polytrauma Patient)</option>
+                    <option value="2">P2 (Stroke Patient)</option>
+                    <option value="3">P3 (Respiratory Patient)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Compound Vector [ICU, Vent, Spec]</label>
+                  <div style="display: flex; gap: 0.5rem;">
+                    <input id="claimReq0" type="number" value="1" min="0" max="10" class="form-input" placeholder="ICU" title="ICU Beds">
+                    <input id="claimReq1" type="number" value="0" min="0" max="10" class="form-input" placeholder="Vent" title="Ventilators">
+                    <input id="claimReq2" type="number" value="2" min="0" max="10" class="form-input" placeholder="Spec" title="Specialists">
+                  </div>
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 0.75rem;">
+                <button id="btnEvaluateCompoundClaim" class="btn btn-primary" style="flex: 1;">
+                  ⚡ Evaluate Compound Claim
+                </button>
+                <button id="btnPreloadUnsafeClaim" class="btn btn-secondary" style="flex: 1;">
+                  ⚠️ Test Unsafe Claim (P0: 3, 3, 2)
+                </button>
+              </div>
+            </div>
+
+            <div id="compoundClaimResultBox" style="background: var(--bg-muted); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; min-height: 100px;">
+              <div style="font-weight: 700; font-size: 0.85rem; color: var(--text-heading); margin-bottom: 0.35rem;">
+                Simulation Output
+              </div>
+              <div style="font-size: 0.8rem; color: var(--text-secondary);">
+                Select a process and request vector to simulate atomic multi-resource allocation and Banker's safety check.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- P3-01: Mass Casualty 100-Thread Concurrency Stress Test Engine (Issue #24) -->
+        <div class="panel" style="margin-top: 1.25rem;">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">🔥 Mass Casualty 100-Thread Concurrency Stress Engine</span>
+              <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                Simulates 100 concurrent emergency intake threads competing for 1 bottleneck ICU bed with zero double allocations.
+              </div>
+            </div>
+            <span class="panel-badge">Issue #24 / P3-01</span>
+          </div>
+
+          <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
+            <button id="btnRunMassCasualtyStress" class="btn btn-danger">
+              🚀 Launch 100 Concurrent Threads Stress Test
+            </button>
+            <div id="stressTestStatusText" style="font-size: 0.82rem; color: var(--text-secondary); font-family: var(--font-mono);">
+              Ready: 100 Threads · 1 Target Bed · Row-Level Mutex Lock
+            </div>
+          </div>
+
+          <div id="stressTestMetricsGrid" class="grid-4col" style="gap: 0.75rem; margin-bottom: 1rem; display: none;">
+            <div class="kpi-card" style="padding: 0.75rem;">
+              <span class="kpi-label">Concurrent Threads</span>
+              <span class="kpi-value" id="stressKpiThreads">100</span>
+            </div>
+            <div class="kpi-card" style="padding: 0.75rem;">
+              <span class="kpi-label">Allocated (Winner)</span>
+              <span class="kpi-value" style="color: var(--status-green);" id="stressKpiAllocated">1</span>
+            </div>
+            <div class="kpi-card" style="padding: 0.75rem;">
+              <span class="kpi-label">Safe Reroutes (Rank #2)</span>
+              <span class="kpi-value" style="color: var(--accent);" id="stressKpiRerouted">99</span>
+            </div>
+            <div class="kpi-card" style="padding: 0.75rem;">
+              <span class="kpi-label">Double Allocations</span>
+              <span class="kpi-value" style="color: var(--status-green);" id="stressKpiDoubleAlloc">0</span>
+            </div>
+          </div>
+
+          <div id="stressTestLogConsole" style="display: none; background: #090d16; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.75rem; font-family: var(--font-mono); font-size: 0.75rem; line-height: 1.6; max-height: 160px; overflow-y: auto; color: #a5f3fc;">
+            <!-- Live Concurrency Stream -->
           </div>
         </div>
       </section>
