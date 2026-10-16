@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart Emergency Resource Allocation & Hospital Referral System</title>
+  <title>ERIS / Emergency Resource Intelligence System</title>
   <meta name="description" content="Intelligent real-time emergency resource allocation engine using OS scheduling, mutual exclusion, and DBMS transactions to route patients to the most suitable hospital.">
   <meta name="author" content="Aviral Mittal">
-  <meta name="theme-color" content="#F4F7FB">
+  <meta name="theme-color" content="#07111f">
 
   <!-- Plus Jakarta Sans & Inter Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -14,10 +14,12 @@
   <link rel="stylesheet" href="css/main.css">
   <link rel="stylesheet" href="css/components.css">
   <link rel="stylesheet" href="css/animations.css">
+  <link rel="stylesheet" href="css/operations.css">
 
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏥</text></svg>">
 </head>
 <body>
+  <a class="skip-link" href="#mainContent">Skip to operations workspace</a>
   <!-- Global Toast Notification Banner -->
   <div id="globalNotificationBanner" style="display: none; position: fixed; top: 70px; right: 20px; z-index: 9999; color: #fff; padding: 0.75rem 1.25rem; border-radius: 10px; font-weight: 600; font-size: 0.85rem; box-shadow: 0 8px 24px rgba(15,39,71,0.18); max-width: 440px; line-height: 1.4;"></div>
 
@@ -27,13 +29,14 @@
       <div class="brand-section">
         <div class="brand-icon">🏥</div>
         <div class="brand-title">
-          <h1>Smart Emergency Resource Allocation</h1>
+          <h1>ERIS <span>Emergency Operations</span></h1>
+          <p>Resource intelligence network · v1.0</p>
         </div>
       </div>
 
       <!-- Linear Segmented Navigation -->
       <nav class="nav-tabs" aria-label="Main navigation">
-        <button class="nav-tab-btn active" data-tab="tab-ingestion" id="nav-emergency">
+        <button class="nav-tab-btn" data-tab="tab-ingestion" id="nav-emergency">
           <span>🚨</span> Emergency Intake
         </button>
         <button class="nav-tab-btn" data-tab="tab-roadside" id="nav-roadside">
@@ -45,8 +48,11 @@
         <button class="nav-tab-btn" data-tab="tab-acceptance" id="nav-acceptance">
           <span>⚡</span> Acceptance Console
         </button>
-        <button class="nav-tab-btn" data-tab="tab-command" id="nav-command">
+        <button class="nav-tab-btn active" data-tab="tab-command" id="nav-command">
           <span>📊</span> Command Center
+        </button>
+        <button class="nav-tab-btn" data-tab="tab-hospitals" id="nav-hospitals">
+          <span>🏥</span> Hospital Network
         </button>
         <button class="nav-tab-btn" data-tab="tab-bankers" id="nav-bankers">
           <span>🧠</span> Banker's Algo
@@ -60,6 +66,9 @@
         <button class="nav-tab-btn" data-tab="tab-ambulance" id="nav-ems">
           <span>🚑</span> EMS Fleet
         </button>
+        <button class="nav-tab-btn" data-tab="tab-activity" id="nav-activity">
+          <span>◷</span> Activity &amp; Audit
+        </button>
       </nav>
 
       <!-- System Telemetry & Auth Profile -->
@@ -69,23 +78,39 @@
           <span class="theme-toggle-text" id="themeToggleText">Dark</span>
         </button>
         <div id="userProfileBadge" class="user-profile-badge">
-          <span id="userRoleIcon">👑</span>
-          <span id="userRoleTitle">Admin Portal</span>
+          <span id="userRoleIcon">◌</span>
+          <span id="userRoleTitle">Demo Operator</span>
           <button id="switchPortalBtn" class="btn-xs-outline">🔄 Switch Portal</button>
         </div>
         <div id="systemClock" class="system-clock">--:--:-- IST</div>
         <div class="live-indicator">
           <span class="pulse-dot"></span>
-          <span>SYSTEM ONLINE</span>
+          <span id="connectionStatus">DEMO MODE</span>
         </div>
       </div>
     </header>
 
     <!-- ═══════════ MAIN CONTENT AREA ═══════════ -->
-    <main class="main-content">
+    <main id="mainContent" class="main-content">
+      <div class="workspace-header">
+        <div>
+          <div class="eyebrow"><span class="eyebrow-dot"></span> Regional emergency coordination</div>
+          <h2 id="workspaceTitle">Command Center</h2>
+          <p id="workspaceDescription">Monitor demand, capacity, referrals, and dispatch readiness across the network.</p>
+        </div>
+        <div class="workspace-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="refreshWorkspaceBtn">↻ Refresh data</button>
+          <button type="button" class="btn btn-primary btn-sm" data-navigate="tab-ingestion">＋ New emergency</button>
+        </div>
+      </div>
+      <div id="dataSourceBanner" class="data-source-banner" role="status">
+        <span class="data-source-icon">◌</span>
+        <div><strong>DEMO / STANDALONE DATA</strong><span>Backend connection is optional. Metrics shown here are local development data until an authorized session is connected.</span></div>
+        <button type="button" class="btn btn-secondary btn-sm" id="openAuthFromBanner">Connect workspace</button>
+      </div>
 
       <!-- TAB 1: Emergency Ingestion & Priority Triage -->
-      <section id="tab-ingestion" class="tab-pane active">
+      <section id="tab-ingestion" class="tab-pane">
         <!-- OS Process Lifecycle Progress — compact connected stepper -->
         <div class="lifecycle-tracker-wrap">
           <div class="lifecycle-tracker-label">OS Process State Lifecycle Tracker</div>
@@ -190,26 +215,26 @@
               <div class="form-group">
                 <label class="form-label">Triage Priority Assessment (OS Priority Level 1-5)</label>
                 <div class="triage-selector">
-                  <div class="triage-btn t1 active" data-level="1">
+                  <button type="button" class="triage-btn t1 active" data-level="1">
                     <span class="triage-level-num">P1</span>
                     <span class="triage-level-desc">Resuscitation</span>
-                  </div>
-                  <div class="triage-btn t2" data-level="2">
+                  </button>
+                  <button type="button" class="triage-btn t2" data-level="2">
                     <span class="triage-level-num">P2</span>
                     <span class="triage-level-desc">Emergent</span>
-                  </div>
-                  <div class="triage-btn t3" data-level="3">
+                  </button>
+                  <button type="button" class="triage-btn t3" data-level="3">
                     <span class="triage-level-num">P3</span>
                     <span class="triage-level-desc">Urgent</span>
-                  </div>
-                  <div class="triage-btn t4" data-level="4">
+                  </button>
+                  <button type="button" class="triage-btn t4" data-level="4">
                     <span class="triage-level-num">P4</span>
                     <span class="triage-level-desc">Semi-Urgent</span>
-                  </div>
-                  <div class="triage-btn t5" data-level="5">
+                  </button>
+                  <button type="button" class="triage-btn t5" data-level="5">
                     <span class="triage-level-num">P5</span>
                     <span class="triage-level-desc">Non-Urgent</span>
-                  </div>
+                  </button>
                 </div>
                 <div id="triageRecommendationInfo">
                   <!-- Populated dynamically by JS -->
@@ -219,13 +244,13 @@
               <div class="form-group">
                 <label class="form-label">Required Medical Resources (Hard Constraints)</label>
                 <div class="resource-tag-grid">
-                  <div class="resource-chip selected" data-resource="icuBeds">🛏️ ICU Bed</div>
-                  <div class="resource-chip selected" data-resource="ventilators">🫁 Ventilator</div>
-                  <div class="resource-chip" data-resource="emergencyOT">🏥 Emergency OT</div>
-                  <div class="resource-chip selected" data-resource="cardiologist">👨‍⚕️ Cardiologist</div>
-                  <div class="resource-chip" data-resource="neurologist">🧠 Neurologist</div>
-                  <div class="resource-chip" data-resource="traumaSurgeon">🩺 Trauma Surgeon</div>
-                  <div class="resource-chip" data-resource="pediatrician">👶 Pediatrician</div>
+                  <button type="button" class="resource-chip selected" data-resource="icuBeds">🛏️ ICU Bed</button>
+                  <button type="button" class="resource-chip selected" data-resource="ventilators">🫁 Ventilator</button>
+                  <button type="button" class="resource-chip" data-resource="emergencyOT">🏥 Emergency OT</button>
+                  <button type="button" class="resource-chip selected" data-resource="cardiologist">👨‍⚕️ Cardiologist</button>
+                  <button type="button" class="resource-chip" data-resource="neurologist">🧠 Neurologist</button>
+                  <button type="button" class="resource-chip" data-resource="traumaSurgeon">🩺 Trauma Surgeon</button>
+                  <button type="button" class="resource-chip" data-resource="pediatrician">👶 Pediatrician</button>
                 </div>
               </div>
 
@@ -245,6 +270,13 @@
             <div class="panel-header">
               <span class="panel-title">📋 Active Priority Scheduling Queue</span>
               <span class="panel-badge">OS Min-Heap</span>
+            </div>
+
+            <div class="filter-bar" aria-label="Emergency queue filters">
+              <label class="filter-field search-field"><span class="sr-only">Search emergencies</span><input id="emergencySearch" class="form-input" type="search" placeholder="Search ID, patient, or condition"></label>
+              <label class="filter-field"><span class="sr-only">Filter by priority</span><select id="emergencyPriorityFilter" class="form-select"><option value="ALL">All priorities</option><option value="1">P1 · Resuscitation</option><option value="2">P2 · Emergent</option><option value="3">P3 · Urgent</option><option value="4">P4 · Semi-urgent</option><option value="5">P5 · Non-urgent</option></select></label>
+              <label class="filter-field"><span class="sr-only">Filter by status</span><select id="emergencyStatusFilter" class="form-select"><option value="ALL">All statuses</option><option value="WAITING">Waiting</option><option value="MATCHING">Matching</option><option value="ALLOCATED">Allocated</option><option value="IN_TREATMENT">In treatment</option><option value="COMPLETED">Completed</option></select></label>
+              <span id="queueResultCount" class="filter-result-count"></span>
             </div>
 
             <div class="table-scroll">
@@ -474,8 +506,33 @@
         </div>
       </section>
 
+      <!-- Dedicated Hospital Network workspace -->
+      <section id="tab-hospitals" class="tab-pane">
+        <div class="panel">
+          <div class="panel-header"><div><span class="panel-title">🏥 Hospital network</span><p class="panel-caption">Capacity, status, and specialist readiness across supported facilities.</p></div><span class="panel-badge">Operational directory</span></div>
+          <div class="filter-bar" aria-label="Hospital filters">
+            <label class="filter-field search-field"><span class="sr-only">Search hospitals</span><input id="hospitalSearch" class="form-input" type="search" placeholder="Search facility or district"></label>
+            <label class="filter-field"><span class="sr-only">Filter hospitals by status</span><select id="hospitalStatusFilter" class="form-select"><option value="ALL">All statuses</option><option value="OPEN">Open</option><option value="LIMITED">Limited</option><option value="CLOSED">Closed</option></select></label>
+            <span id="hospitalResultsCount" class="filter-result-count"></span>
+          </div>
+          <div id="hospitalsManagementGrid" class="grid-3col"></div>
+        </div>
+      </section>
+
+      <!-- Activity and audit workspace -->
+      <section id="tab-activity" class="tab-pane">
+        <div class="panel">
+          <div class="panel-header"><div><span class="panel-title">◷ Activity history</span><p class="panel-caption">Local application activity and immutable Phase 3 audit records.</p></div><span id="activitySourceBadge" class="panel-badge">Development ledger</span></div>
+          <div id="activityTimeline" class="activity-timeline"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><div><span class="panel-title">🛡️ Audit integrity</span><p class="panel-caption">The sealed ledger remains available in the Command Center analytics view.</p></div><button type="button" class="btn btn-secondary btn-sm" data-navigate="tab-command">Open analytics</button></div>
+          <div id="activityAuditSummary" class="audit-summary-grid"></div>
+        </div>
+      </section>
+
       <!-- TAB 4: Command Center & KPI Metrics -->
-      <section id="tab-command" class="tab-pane">
+      <section id="tab-command" class="tab-pane active">
         <!-- KPI Row -->
         <div class="kpi-grid">
           <div class="kpi-card">
@@ -483,7 +540,7 @@
               <span class="kpi-title">Active Emergencies</span>
               <span class="kpi-icon">🚨</span>
             </div>
-            <div id="kpiActiveEmergencies" class="kpi-value">3</div>
+            <div id="kpiActiveEmergencies" class="kpi-value">—</div>
             <div class="kpi-subtext">Currently monitored</div>
           </div>
 
@@ -492,7 +549,7 @@
               <span class="kpi-title">Critical P1 Cases</span>
               <span class="kpi-icon">⚡</span>
             </div>
-            <div id="kpiCriticalWaiting" class="kpi-value">1</div>
+            <div id="kpiCriticalWaiting" class="kpi-value">—</div>
             <div class="kpi-subtext">Awaiting allocation</div>
           </div>
 
@@ -501,7 +558,7 @@
               <span class="kpi-title">Available ICU Beds</span>
               <span class="kpi-icon">🛏️</span>
             </div>
-            <div id="kpiIcuAvailable" class="kpi-value">18</div>
+            <div id="kpiIcuAvailable" class="kpi-value">—</div>
             <div class="kpi-subtext">Across network</div>
           </div>
 
@@ -510,7 +567,7 @@
               <span class="kpi-title">Open Ventilators</span>
               <span class="kpi-icon">🫁</span>
             </div>
-            <div id="kpiVentilatorsAvailable" class="kpi-value">14</div>
+            <div id="kpiVentilatorsAvailable" class="kpi-value">—</div>
             <div class="kpi-subtext">Across network</div>
           </div>
 
@@ -519,8 +576,8 @@
               <span class="kpi-title">Hospitals Open</span>
               <span class="kpi-icon">🏥</span>
             </div>
-            <div id="kpiHospitalsOpen" class="kpi-value">5/6</div>
-            <div class="kpi-subtext">1 Diverting/Closed</div>
+            <div id="kpiHospitalsOpen" class="kpi-value">—</div>
+            <div id="kpiHospitalsStatus" class="kpi-subtext">Network status</div>
           </div>
 
           <div class="kpi-card">
@@ -528,8 +585,24 @@
               <span class="kpi-title">EMS Ambulances</span>
               <span class="kpi-icon">🚑</span>
             </div>
-            <div id="kpiAmbulancesAvail" class="kpi-value">3</div>
+            <div id="kpiAmbulancesAvail" class="kpi-value">—</div>
             <div class="kpi-subtext">Standby available</div>
+          </div>
+
+          <div class="kpi-card kpi-warning">
+            <div class="kpi-header"><span class="kpi-title">Pending referrals</span><span class="kpi-icon">⏳</span></div>
+            <div id="kpiReferralsPending" class="kpi-value">—</div>
+            <div class="kpi-subtext">Awaiting facility response</div>
+          </div>
+          <div class="kpi-card kpi-success">
+            <div class="kpi-header"><span class="kpi-title">Accepted referrals</span><span class="kpi-icon">✓</span></div>
+            <div id="kpiReferralsAccepted" class="kpi-value">—</div>
+            <div class="kpi-subtext">Committed destinations</div>
+          </div>
+          <div class="kpi-card kpi-critical">
+            <div class="kpi-header"><span class="kpi-title">Closed / expired</span><span class="kpi-icon">!</span></div>
+            <div id="kpiReferralsClosed" class="kpi-value">—</div>
+            <div class="kpi-subtext">Rejected or timed out</div>
           </div>
         </div>
 
@@ -537,10 +610,115 @@
         <div class="panel">
           <div class="panel-header">
             <span class="panel-title">🏥 Regional Hospital Capacity Grid</span>
-            <span class="panel-badge">Live DBMS Sync</span>
+            <span class="panel-badge">Capacity overview</span>
           </div>
           <div id="hospitalsDirectoryGrid" class="grid-3col">
             <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <div class="dashboard-grid" aria-label="Operational overview">
+          <div class="dashboard-main">
+            <section class="panel dashboard-panel">
+              <div class="panel-header">
+                <div><span class="panel-title">🚨 Priority queue</span><p class="panel-caption">Highest-risk cases requiring coordination now</p></div>
+                <button type="button" class="btn btn-secondary btn-sm" data-navigate="tab-ingestion">Open queue</button>
+              </div>
+              <div class="table-scroll compact-table"><table class="matrix-table"><thead><tr><th>Case</th><th>Patient</th><th>Priority</th><th>State</th><th>Destination</th></tr></thead><tbody id="commandPriorityQueueBody"></tbody></table></div>
+            </section>
+            <section class="panel dashboard-panel">
+              <div class="panel-header"><div><span class="panel-title">🗺️ Network view</span><p class="panel-caption">Hospital capacity and EMS positions</p></div><button type="button" class="btn btn-secondary btn-sm" data-navigate="tab-map">Open map</button></div>
+              <div id="commandMap" class="command-map-placeholder"><div class="map-grid-lines"></div><div class="map-placeholder-copy"><span>⌁</span><strong>Map telemetry</strong><small>Open the GPS map for live Leaflet layers.</small></div></div>
+            </section>
+          </div>
+          <aside class="dashboard-rail">
+            <section class="panel dashboard-panel"><div class="panel-header"><div><span class="panel-title">⚡ Referral pulse</span><p class="panel-caption">Handshake outcomes</p></div></div><div id="commandReferralSummary" class="summary-list"></div></section>
+            <section class="panel dashboard-panel"><div class="panel-header"><div><span class="panel-title">🚑 Fleet readiness</span><p class="panel-caption">Current ambulance state</p></div><button type="button" class="btn btn-secondary btn-sm" data-navigate="tab-ambulance">View fleet</button></div><div id="commandFleetSummary" class="summary-list"></div></section>
+            <section class="panel dashboard-panel"><div class="panel-header"><div><span class="panel-title">◷ Activity</span><p class="panel-caption">Latest local operational events</p></div><button type="button" class="btn btn-secondary btn-sm" data-navigate="tab-activity">View all</button></div><div id="commandActivityFeed" class="activity-feed"></div></section>
+          </aside>
+        </div>
+
+        <!-- P3-03: Emergency Analytics & Trend Forecasting Dashboard (Issue #26) -->
+        <div class="panel" style="margin-top: 1.25rem;">
+          <div class="panel-header">
+            <div>
+                <span class="panel-title">📈 Emergency Demand Forecasting & Bottleneck Analytics</span>
+                <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                 Phase 3 local simulation view · Intake velocity, bottlenecks, and response SLA tracking
+              </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <select id="analyticsTimeRange" class="form-select" style="width: auto; font-size: 0.78rem; padding: 0.35rem 0.65rem;">
+                <option value="24h">Last 24 Hours</option>
+                <option value="7d">Last 7 Days</option>
+                <option value="30d">Last 30 Days</option>
+              </select>
+              <button id="btnExportAnalyticsCsv" class="btn btn-secondary btn-sm">
+                📥 Export CSV Report
+              </button>
+            </div>
+          </div>
+
+          <div class="grid-2col" style="gap: 1.25rem; margin-bottom: 1.25rem;">
+            <!-- Hourly Volume Distribution -->
+            <div style="background: var(--bg-muted); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <span style="font-weight: 700; font-size: 0.85rem; color: var(--text-heading);">⏰ Hourly Emergency Intake Velocity (24h Trend)</span>
+                <span style="font-size: 0.72rem; color: var(--status-red); font-weight: 700;">Peak: 22:00 - 02:00 (Highway Trauma)</span>
+              </div>
+              <div id="analyticsHourlyChart" style="display: flex; align-items: flex-end; gap: 6px; height: 130px; padding-top: 15px;">
+                <!-- Rendered dynamically -->
+              </div>
+            </div>
+
+            <!-- Hospital Rejection / Acceptance Bottleneck -->
+            <div style="background: var(--bg-muted); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <span style="font-weight: 700; font-size: 0.85rem; color: var(--text-heading);">⚡ Referral Acceptance vs Rejection by Facility</span>
+                <span style="font-size: 0.72rem; color: var(--accent); font-weight: 700;">Target SLA: &lt; 60s Latency</span>
+              </div>
+              <div id="analyticsBottleneckBars" style="display: flex; flex-direction: column; gap: 8px;">
+                <!-- Rendered dynamically -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- P3-04: Immutable Medico-Legal Audit Ledger Console (Issue #27) -->
+        <div class="panel" style="margin-top: 1.25rem;">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">🛡️ Phase 3 sealed audit ledger</span>
+                <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                 Append-only development ledger with block-chain integrity verification
+              </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <span id="auditIntegrityStatusBadge" class="badge-status badge-open" style="font-size: 0.75rem;">
+                VERIFIED: ZERO TAMPERING DETECTED
+              </span>
+              <button id="btnExportAuditLedgerCsv" class="btn btn-secondary btn-sm">
+                📜 Export Sealed Audit Trail
+              </button>
+            </div>
+          </div>
+
+          <div class="table-scroll" style="max-height: 280px;">
+            <table class="matrix-table">
+              <thead>
+                <tr>
+                  <th>Seq #</th>
+                  <th>Audit ID</th>
+                  <th>Timestamp (IST)</th>
+                  <th>Event Type</th>
+                  <th>Cryptographic Integrity Hash (SHA-256)</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="auditLedgerTableBody">
+                <!-- Rendered dynamically -->
+              </tbody>
+            </table>
           </div>
         </div>
       </section>
@@ -667,6 +845,106 @@
             </div>
           </div>
         </div>
+
+        <!-- P3-02: Compound Multi-Resource Claims Engine (Issue #25) -->
+        <div class="panel" style="margin-top: 1.25rem;">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">🧩 Compound Multi-Resource Claim Tester (OS Deadlock Avoidance)</span>
+              <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                Simulates real-time multi-resource atomic claims. Proactively halts requests that would trigger circular wait.
+              </div>
+            </div>
+            <span class="panel-badge">Issue #25 / P3-02</span>
+          </div>
+
+          <div class="grid-2col" style="gap: 1.25rem; align-items: start;">
+            <div>
+              <div class="grid-2col" style="gap: 0.75rem; margin-bottom: 0.75rem;">
+                <div class="form-group">
+                  <label class="form-label">Requesting Process / Patient</label>
+                  <select id="compoundProcessSelect" class="form-select">
+                    <option value="0">P0 (Cardiac Patient)</option>
+                    <option value="1" selected>P1 (Polytrauma Patient)</option>
+                    <option value="2">P2 (Stroke Patient)</option>
+                    <option value="3">P3 (Respiratory Patient)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Compound Vector [ICU, Vent, Spec]</label>
+                  <div style="display: flex; gap: 0.5rem;">
+                    <input id="claimReq0" type="number" value="1" min="0" max="10" class="form-input" placeholder="ICU" title="ICU Beds">
+                    <input id="claimReq1" type="number" value="0" min="0" max="10" class="form-input" placeholder="Vent" title="Ventilators">
+                    <input id="claimReq2" type="number" value="2" min="0" max="10" class="form-input" placeholder="Spec" title="Specialists">
+                  </div>
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 0.75rem;">
+                <button id="btnEvaluateCompoundClaim" class="btn btn-primary" style="flex: 1;">
+                  ⚡ Evaluate Compound Claim
+                </button>
+                <button id="btnPreloadUnsafeClaim" class="btn btn-secondary" style="flex: 1;">
+                  ⚠️ Test Unsafe Claim (P0: 3, 3, 2)
+                </button>
+              </div>
+            </div>
+
+            <div id="compoundClaimResultBox" style="background: var(--bg-muted); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; min-height: 100px;">
+              <div style="font-weight: 700; font-size: 0.85rem; color: var(--text-heading); margin-bottom: 0.35rem;">
+                Simulation Output
+              </div>
+              <div style="font-size: 0.8rem; color: var(--text-secondary);">
+                Select a process and request vector to simulate atomic multi-resource allocation and Banker's safety check.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- P3-01: Mass Casualty 100-Thread Concurrency Stress Test Engine (Issue #24) -->
+        <div class="panel" style="margin-top: 1.25rem;">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">🔥 Mass Casualty 100-Thread Concurrency Stress Engine</span>
+              <div style="font-size: 0.775rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                Simulates 100 concurrent emergency intake threads competing for 1 bottleneck ICU bed with zero double allocations.
+              </div>
+            </div>
+            <span class="panel-badge">Issue #24 / P3-01</span>
+          </div>
+
+          <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
+            <button id="btnRunMassCasualtyStress" class="btn btn-danger">
+              🚀 Launch 100 Concurrent Threads Stress Test
+            </button>
+            <div id="stressTestStatusText" style="font-size: 0.82rem; color: var(--text-secondary); font-family: var(--font-mono);">
+              Ready: 100 Threads · 1 Target Bed · Row-Level Mutex Lock
+            </div>
+          </div>
+
+          <div id="stressTestMetricsGrid" class="grid-4col" style="gap: 0.75rem; margin-bottom: 1rem; display: none;">
+            <div class="kpi-card" style="padding: 0.75rem;">
+              <span class="kpi-label">Concurrent Threads</span>
+              <span class="kpi-value" id="stressKpiThreads">100</span>
+            </div>
+            <div class="kpi-card" style="padding: 0.75rem;">
+              <span class="kpi-label">Allocated (Winner)</span>
+              <span class="kpi-value" style="color: var(--status-green);" id="stressKpiAllocated">1</span>
+            </div>
+            <div class="kpi-card" style="padding: 0.75rem;">
+              <span class="kpi-label">Safe Reroutes (Rank #2)</span>
+              <span class="kpi-value" style="color: var(--accent);" id="stressKpiRerouted">99</span>
+            </div>
+            <div class="kpi-card" style="padding: 0.75rem;">
+              <span class="kpi-label">Double Allocations</span>
+              <span class="kpi-value" style="color: var(--status-green);" id="stressKpiDoubleAlloc">0</span>
+            </div>
+          </div>
+
+          <div id="stressTestLogConsole" style="display: none; background: #090d16; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.75rem; font-family: var(--font-mono); font-size: 0.75rem; line-height: 1.6; max-height: 160px; overflow-y: auto; color: #a5f3fc;">
+            <!-- Live Concurrency Stream -->
+          </div>
+        </div>
       </section>
 
       <!-- TAB 6: Ambulance Fleet -->
@@ -675,6 +953,11 @@
           <div class="panel-header">
             <span class="panel-title">🚑 EMS Ambulance Telemetry & Transport Fleet</span>
             <span class="panel-badge">Closed-Loop Transport</span>
+          </div>
+          <div class="filter-bar" aria-label="Ambulance filters">
+            <label class="filter-field search-field"><span class="sr-only">Search ambulances</span><input id="ambulanceSearch" class="form-input" type="search" placeholder="Search unit or station"></label>
+            <label class="filter-field"><span class="sr-only">Filter ambulances by status</span><select id="ambulanceStatusFilter" class="form-select"><option value="ALL">All statuses</option><option value="AVAILABLE">Available</option><option value="IN_TRANSIT">In transit</option><option value="MAINTENANCE">Maintenance</option></select></label>
+            <span id="ambulanceResultsCount" class="filter-result-count"></span>
           </div>
           <div id="ambulanceFleetGrid" class="grid-3col">
             <!-- Rendered via JS -->
@@ -740,6 +1023,7 @@
           <!-- Doctor Filter and Add Controls -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
             <div style="display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap;">
+              <label class="filter-field search-field"><span class="sr-only">Search specialists</span><input id="doctorSearch" class="form-input" type="search" placeholder="Search specialist"></label>
               <select id="doctorFacilityFilter" class="form-select" style="width: auto; font-size: 0.82rem; padding: 0.4rem 0.75rem;">
                 <option value="ALL">All Facilities</option>
                 <option value="H-101">Apex City Trauma (H-101)</option>
@@ -792,17 +1076,17 @@
         </div>
 
         <!-- Add Doctor Modal -->
-        <div id="addDoctorModal" class="modal-overlay" style="display: none;">
+        <div id="addDoctorModal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="addDoctorTitle">
           <div class="modal-card" style="max-width: 500px;">
             <div class="modal-header">
               <div class="modal-title-group">
                 <span class="auth-icon">👨‍⚕️</span>
                 <div>
-                  <h2>Add On-Call Specialist</h2>
+                  <h2 id="addDoctorTitle">Add On-Call Specialist</h2>
                   <p>Register emergency doctor to hospital active shift schedule</p>
                 </div>
               </div>
-              <button id="closeDoctorModalBtn" class="close-btn">&times;</button>
+              <button id="closeDoctorModalBtn" class="close-btn" type="button" aria-label="Close specialist form">&times;</button>
             </div>
 
             <form id="addDoctorForm" style="margin-top: 1rem;">
@@ -869,17 +1153,17 @@
   </div>
 
   <!-- ═══════════ AUTH & ROLE PORTAL MODAL ═══════════ -->
-  <div id="authPortalModal" class="modal-overlay" style="display: none;">
+  <div id="authPortalModal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="authPortalTitle">
     <div class="modal-card">
       <div class="modal-header">
         <div class="modal-title-group">
           <span class="auth-icon">🛡️</span>
           <div>
-            <h2>System Role Portal & Security Control</h2>
+            <h2 id="authPortalTitle">System Role Portal & Security Control</h2>
             <p>Access Control Isolation (Admin vs. Hospital Desk vs. Paramedic)</p>
           </div>
         </div>
-        <button id="closeAuthModalBtn" class="close-btn">&times;</button>
+        <button id="closeAuthModalBtn" class="close-btn" type="button" aria-label="Close role portal">&times;</button>
       </div>
       
       <div class="role-selector-tabs">
@@ -902,11 +1186,11 @@
         <form id="adminLoginForm" class="auth-form">
           <div class="form-group">
             <label class="form-label">Admin ID</label>
-            <input type="text" id="adminUsernameInput" class="form-input" value="admin">
+            <input type="text" id="adminUsernameInput" class="form-input" placeholder="Authorized admin username" autocomplete="username" required>
           </div>
           <div class="form-group">
             <label class="form-label">Password</label>
-            <input type="password" id="adminPasswordInput" class="form-input" value="admin123">
+            <input type="password" id="adminPasswordInput" class="form-input" placeholder="Password" autocomplete="current-password" required>
           </div>
           <button type="submit" class="btn btn-primary btn-block">👑 Login as Command Center Admin</button>
         </form>
@@ -930,7 +1214,7 @@
           </div>
           <div class="form-group">
             <label class="form-label">Desk Passcode</label>
-            <input type="password" id="hospitalPasswordInput" class="form-input" value="hospital123">
+            <input type="password" id="hospitalPasswordInput" class="form-input" placeholder="Desk passcode" autocomplete="current-password" required>
           </div>
           <button type="submit" class="btn btn-cyan btn-block">🏥 Login to Hospital Desk Console</button>
         </form>
@@ -944,11 +1228,11 @@
         <form id="paramedicLoginForm" class="auth-form">
           <div class="form-group">
             <label class="form-label">Paramedic Call Sign</label>
-            <input type="text" id="paramedicUnitInput" class="form-input" value="UNIT-402">
+            <input type="text" id="paramedicUnitInput" class="form-input" placeholder="e.g. UNIT-402" autocomplete="username" required>
           </div>
           <div class="form-group">
             <label class="form-label">Access PIN</label>
-            <input type="password" id="paramedicPinInput" class="form-input" value="paramedic123">
+            <input type="password" id="paramedicPinInput" class="form-input" placeholder="Access PIN" autocomplete="current-password" required>
           </div>
           <button type="submit" class="btn btn-accent btn-block">🚑 Login as Field Paramedic</button>
         </form>
@@ -956,7 +1240,7 @@
 
       <!-- Quick Demo Role Switcher -->
       <div class="quick-demo-login-bar">
-        <span class="quick-demo-title">⚡ Instant Demo Portal Logins:</span>
+        <span class="quick-demo-title">⚡ Simulation view · no backend session</span>
         <div class="quick-demo-btns">
           <button type="button" class="btn-demo" id="quickLoginAdmin">👑 Admin</button>
           <button type="button" class="btn-demo" id="quickLoginFortis">🏥 Fortis Desk</button>
@@ -964,19 +1248,21 @@
           <button type="button" class="btn-demo" id="quickLoginEMS">🚑 Paramedic</button>
         </div>
       </div>
+      <div id="authFormError" class="form-error" role="alert" aria-live="polite"></div>
     </div>
+  </div>
   <!-- ═══════════ GPS TURN-BY-TURN NAVIGATION MODAL ═══════════ -->
-  <div id="routeDirectionsModal" class="modal-overlay" style="display: none; background: rgba(15,39,71,0.55);">
+  <div id="routeDirectionsModal" class="modal-overlay" style="display: none; background: rgba(15,39,71,0.55);" role="dialog" aria-modal="true" aria-labelledby="routeModalTitle">
     <div class="modal-card" style="max-width: 580px;">
       <div class="modal-header">
         <div class="modal-title-group">
           <span class="auth-icon" style="background: linear-gradient(135deg, #0284c7 0%, #10b981 100%);">🧭</span>
           <div>
-            <h2>Turn-by-Turn GPS Navigation Route</h2>
+            <h2 id="routeModalTitle">Turn-by-Turn GPS Navigation Route</h2>
             <p>Real-Time Emergency Corridor to Recommended Hospital</p>
           </div>
         </div>
-        <button id="closeRouteModalBtn" class="close-btn">&times;</button>
+        <button id="closeRouteModalBtn" class="close-btn" type="button" aria-label="Close route directions">&times;</button>
       </div>
 
       <div id="routeModalContent" style="padding: 1.25rem 0;">

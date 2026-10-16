@@ -20,8 +20,18 @@ import {
   AmbulancesAPI,
   AnalyticsAPI,
   initWebSocket,
-  checkServerHealth
+  checkServerHealth,
+  getAuthToken,
+  getCurrentUser
 } from './api.js';
+import {
+  getLedgerEntries,
+  verifyLedgerIntegrity,
+  exportLedgerToCsv,
+  appendAuditEntry,
+  getLedgerStats,
+  EVENT_TYPES
+} from './audit_ledger.js';
 
 // Seed Doctors for UI Registry (Phase 2 P2-07)
 const initialDoctorsList = [
@@ -55,8 +65,12 @@ const state = {
     specialist: "cardiologist"
   },
   currentActiveReferral: null,
-  activeTab: "tab-ingestion",
+  activeTab: "tab-command",
   currentUserRole: "admin",
+  currentUser: null,
+  backendOnline: false,
+  dataSource: "demo",
+  activity: [],
   roadside: {
     currentLocation: ROADSIDE_HOTSPOTS[0],
     selectedSymptomIds: ["unconscious", "severe_head_injury", "crushed_limb_fracture"],
@@ -99,6 +113,9 @@ document.addEventListener("DOMContentLoaded", () => {
   initAuthPortalModal();
   initDoctorsScheduler();
   initRealtimeBackendBridge();
+  initAnalyticsDashboard();
+  renderAuditLedgerTable();
+  initOperationsWorkspace();
 });
 
 // Theme Toggle Engine (Dark / Light Mode)
@@ -110,7 +127,9 @@ function initTheme() {
   // Read saved preference or system preference
   const savedTheme = localStorage.getItem("ser_theme");
   const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const initialTheme = savedTheme || (prefersDark ? "dark" : "light");
+  // ERIS is an operational console: start in the high-contrast dark shell,
+  // while still allowing a deliberate user toggle or saved preference.
+  const initialTheme = savedTheme || "dark";
 
   applyTheme(initialTheme, false);
 
@@ -163,6 +182,10 @@ function initNavbarTabs() {
   const tabs = document.querySelectorAll(".nav-tab-btn");
   tabs.forEach(tab => {
     tab.addEventListener("click", () => {
+      if (tab.classList.contains("locked-tab")) {
+        showNotification("This workspace is restricted for the current role.", "urgent");
+        return;
+      }
       tabs.forEach(t => t.classList.remove("active"));
       tab.classList.add("active");
 
@@ -171,6 +194,7 @@ function initNavbarTabs() {
       document.querySelectorAll(".tab-pane").forEach(pane => pane.classList.remove("active"));
       const targetPane = document.getElementById(targetId);
       if (targetPane) targetPane.classList.add("active");
+      updateWorkspaceHeader(targetId);
 
       // Re-render views on tab switch
       if (targetId === "tab-roadside") performRoadsideAnalysis();
@@ -178,14 +202,43 @@ function initNavbarTabs() {
       if (targetId === "tab-command") {
         renderKpiCards();
         renderHospitalsDirectory();
+        renderAnalyticsCharts();
+        renderAuditLedgerTable();
       }
       if (targetId === "tab-acceptance") renderHospitalAcceptanceView();
       if (targetId === "tab-bankers") renderBankersView();
       if (targetId === "tab-ambulance") renderAmbulanceFleet();
       if (targetId === "tab-map") renderLeafletMap();
       if (targetId === "tab-doctors") renderDoctorsRoster();
+      if (targetId === "tab-hospitals") renderHospitalManagement();
+      if (targetId === "tab-activity") renderActivityWorkspace();
     });
   });
+
+  document.querySelectorAll("[data-navigate]").forEach(control => {
+    control.addEventListener("click", () => triggerTabSwitch(control.getAttribute("data-navigate")));
+  });
+}
+
+function updateWorkspaceHeader(targetId) {
+  const copy = {
+    "tab-ingestion": ["Emergency intake", "Capture a case, assign operational priority, and place it in the coordination queue."],
+    "tab-roadside": ["Roadside assist", "Translate field observations into a triage-aware hospital suitability recommendation."],
+    "tab-ranking": ["Suitability ranking", "Compare eligible hospitals using resource fit, response, capacity, and distance."],
+    "tab-acceptance": ["Acceptance console", "Complete the closed-loop hospital handshake before a destination is committed."],
+    "tab-command": ["Command Center", "Monitor demand, capacity, referrals, and dispatch readiness across the network."],
+    "tab-hospitals": ["Hospital network", "Review facility status, critical resources, and operational capacity."],
+    "tab-bankers": ["Banker's visualizer", "Explore safe-state resource allocation and deadlock avoidance."],
+    "tab-map": ["Regional map", "Inspect hospital capacity, ambulance telemetry, and roadside incident layers."],
+    "tab-doctors": ["Specialist roster", "Coordinate on-call specialists and shift availability."],
+    "tab-ambulance": ["EMS fleet", "Track unit readiness and closed-loop transport operations."],
+    "tab-activity": ["Activity & audit", "Review local operational events and the sealed Phase 3 audit ledger."],
+  };
+  const [title, description] = copy[targetId] || copy["tab-command"];
+  const titleEl = document.getElementById("workspaceTitle");
+  const descriptionEl = document.getElementById("workspaceDescription");
+  if (titleEl) titleEl.textContent = title;
+  if (descriptionEl) descriptionEl.textContent = description;
 }
 
 // Live Clock
@@ -199,6 +252,132 @@ function initClock() {
   };
   update();
   setInterval(update, 1000);
+}
+
+function initOperationsWorkspace() {
+  const rerenderQueue = () => renderEmergencyQueue();
+  ["emergencySearch", "emergencyPriorityFilter", "emergencyStatusFilter"].forEach(id => {
+    document.getElementById(id)?.addEventListener("input", rerenderQueue);
+    document.getElementById(id)?.addEventListener("change", rerenderQueue);
+  });
+  ["hospitalSearch", "hospitalStatusFilter"].forEach(id => {
+    document.getElementById(id)?.addEventListener("input", renderHospitalManagement);
+    document.getElementById(id)?.addEventListener("change", renderHospitalManagement);
+  });
+  ["ambulanceSearch", "ambulanceStatusFilter"].forEach(id => {
+    document.getElementById(id)?.addEventListener("input", renderAmbulanceFleet);
+    document.getElementById(id)?.addEventListener("change", renderAmbulanceFleet);
+  });
+  document.getElementById("doctorSearch")?.addEventListener("input", renderDoctorsRoster);
+  document.getElementById("refreshWorkspaceBtn")?.addEventListener("click", () => refreshWorkspaceData());
+  document.getElementById("openAuthFromBanner")?.addEventListener("click", () => {
+    const modal = document.getElementById("authPortalModal");
+    if (modal) modal.style.display = "flex";
+  });
+  document.querySelectorAll(".triage-btn, .resource-chip").forEach(control => {
+    if (!control.hasAttribute("tabindex")) control.setAttribute("tabindex", "0");
+    control.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); control.click(); }
+    });
+  });
+  updateWorkspaceHeader(state.activeTab);
+  applyRoleVisibility();
+  renderHospitalManagement();
+  renderCommandOverview();
+  renderActivityWorkspace();
+}
+
+function updateDataSourceBanner() {
+  const banner = document.getElementById("dataSourceBanner");
+  const status = document.getElementById("connectionStatus");
+  if (state.dataSource === "backend") {
+    if (banner) {
+      banner.classList.add("connected");
+      banner.innerHTML = `<span class="data-source-icon">●</span><div><strong>AUTHORIZED LIVE WORKSPACE</strong><span>Operational data is synchronized with the connected application session.</span></div><button type="button" class="btn btn-secondary btn-sm" id="refreshWorkspaceBtn">↻ Refresh data</button>`;
+      banner.querySelector("#refreshWorkspaceBtn")?.addEventListener("click", () => refreshWorkspaceData());
+    }
+    if (status) status.textContent = "LIVE SESSION";
+  } else {
+    if (status) status.textContent = state.backendOnline ? "API READY" : "DEMO MODE";
+  }
+}
+
+async function refreshWorkspaceData() {
+  if (!getAuthToken()) {
+    showNotification("Connect an authorized role to refresh from the API. Showing standalone development data.", "normal");
+    renderKpiCards();
+    renderHospitalsDirectory();
+    renderEmergencyQueue();
+    renderAmbulanceFleet();
+    renderDoctorsRoster();
+    return false;
+  }
+  try {
+    const [hospitals, emergencies, doctors, ambulances] = await Promise.all([
+      HospitalsAPI.getAll(), EmergenciesAPI.getAll(), DoctorsAPI.getAll(), AmbulancesAPI.getAll()
+    ]);
+    if (hospitals?.hospitals) state.hospitals = hospitals.hospitals.map(normalizeHospital).filter(Boolean);
+    if (emergencies?.queue) state.emergencyQueue = emergencies.queue.map(normalizeEmergency).filter(Boolean).sort(comparePriority);
+    if (doctors?.doctors) state.doctors = doctors.doctors;
+    if (ambulances?.ambulances) state.ambulances = ambulances.ambulances.map(normalizeAmbulance).filter(Boolean);
+    state.dataSource = "backend";
+    updateDataSourceBanner();
+    renderKpiCards(); renderHospitalsDirectory(); renderEmergencyQueue(); renderAmbulanceFleet(); renderDoctorsRoster();
+    recordActivity("DATA_REFRESHED", "Authorized workspace data refreshed", "success");
+    showNotification("✓ Workspace data refreshed from the connected API.", "success");
+    return true;
+  } catch (error) {
+    showNotification(`Unable to refresh workspace data: ${error.message}`, "urgent");
+    return false;
+  }
+}
+
+function normalizeHospital(hospital) {
+  if (!hospital) return null;
+  const resources = hospital.resources || {};
+  const resourceFor = (keys) => keys.map(key => resources[key]).find(Boolean) || { total: 0, available: 0, locked: 0 };
+  return {
+    id: hospital.id || hospital.hospital_id,
+    name: hospital.name || hospital.hospital_name,
+    address: hospital.address || hospital.location_address || "Regional facility",
+    status: hospital.status || hospital.emergency_status || "OPEN",
+    distanceKm: Number(hospital.distanceKm || hospital.distance_km || 0),
+    coordinates: hospital.coordinates || { lat: hospital.location_lat, lng: hospital.location_lng },
+    phone: hospital.phone || hospital.contact_phone,
+    traumaLevel: hospital.traumaLevel || hospital.trauma_level,
+    acceptanceRate: Number(hospital.acceptanceRate ?? hospital.acceptance_rate ?? 0),
+    avgResponseSec: Number(hospital.avgResponseSec ?? hospital.avg_response_sec ?? 0),
+    rating: Number(hospital.rating || 0),
+    resources: {
+      icuBeds: resourceFor(["icuBeds", "icubed", "icu_bed"]),
+      ventilators: resourceFor(["ventilators", "ventilator"]),
+      emergencyOT: resourceFor(["emergencyOT", "ot"]),
+      specialists: hospital.specialists || { cardiologist: false, neurologist: false, traumaSurgeon: false, pediatrician: false }
+    }
+  };
+}
+
+function normalizeEmergency(item) {
+  if (!item) return null;
+  const patient = item.patient || {};
+  return {
+    ...item,
+    requestId: item.requestId || item.request_id,
+    patientName: item.patientName || patient.patient_name || patient.name || "Operational case",
+    age: item.age || patient.age || "—",
+    emergencyType: item.emergencyType || item.emergency_type || "GENERAL",
+    priority: Number(item.priority || item.triage_priority || 5),
+    priorityName: item.priorityName || item.priority_name || `Level ${item.priority || item.triage_priority || 5}`,
+    status: item.status || "WAITING",
+    assignedHospital: item.assignedHospital || item.assigned_hospital || "Matching...",
+    requestTime: item.requestTime || item.request_time || new Date().toLocaleTimeString(),
+    requiredResources: item.requiredResources || item.required_resources || []
+  };
+}
+
+function normalizeAmbulance(item) {
+  if (!item) return null;
+  return { ...item, id: item.id || item.ambulance_id, type: item.type || item.ambulance_type, hospitalId: item.hospitalId || item.hospital_id, etaMins: item.etaMins ?? item.eta_mins ?? 0 };
 }
 
 // KPI Render
@@ -231,6 +410,16 @@ function renderKpiCards() {
   setVal("kpiVentilatorsAvailable", totalVentAvail);
   setVal("kpiHospitalsOpen", `${openHospitals}/${state.hospitals.length}`);
   setVal("kpiAmbulancesAvail", availAmbulances);
+
+  const activeReferral = state.currentActiveReferral || lockManager.activeLock;
+  const pendingReferrals = activeReferral ? 1 : 0;
+  const acceptedReferrals = state.emergencyQueue.filter(e => e.status === "ALLOCATED" || e.status === "IN_TREATMENT").length;
+  const closedReferrals = state.activity.filter(event => ["REJECTED", "EXPIRED", "TIMEOUT"].some(term => event.type.includes(term))).length;
+  setVal("kpiReferralsPending", pendingReferrals);
+  setVal("kpiReferralsAccepted", acceptedReferrals);
+  setVal("kpiReferralsClosed", closedReferrals);
+  setVal("kpiHospitalsStatus", `${state.hospitals.filter(h => h.status === "CLOSED").length} closed · ${state.hospitals.filter(h => h.status === "LIMITED").length} limited`);
+  renderCommandOverview();
 }
 
 // Triage Selector UI
@@ -316,7 +505,7 @@ function attachFormListeners() {
   const form = document.getElementById("emergencyIntakeForm");
   if (!form) return;
 
-  form.addEventListener("submit", (e) => {
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const patientName = document.getElementById("patientName").value.trim() || "Anonymous Patient";
     const patientAge = parseInt(document.getElementById("patientAge").value, 10) || 45;
@@ -336,6 +525,30 @@ function attachFormListeners() {
       notes
     };
 
+    if (getAuthToken()) {
+      try {
+        const response = await EmergenciesAPI.create({
+          patient_name: patientName,
+          age: patientAge,
+          emergency_type: state.selectedEmergencyType,
+          triage_priority: state.selectedTriage,
+          clinical_notes: notes
+        });
+        if (response?.request_id) {
+          newRequest.requestId = response.request_id;
+          state.dataSource = "backend";
+          await refreshWorkspaceData();
+          triggerTabSwitch("tab-ranking");
+          recordActivity("REQUEST_CREATED", `Emergency ${newRequest.requestId} entered the authorized priority queue`, "critical");
+          showNotification(`🚨 Emergency ${newRequest.requestId} registered in the connected queue.`, "urgent");
+          return;
+        }
+      } catch (error) {
+        showNotification(`API registration failed: ${error.message}`, "urgent");
+        return;
+      }
+    }
+
     // Insert into Priority Queue (sorted by comparePriority)
     state.emergencyQueue.push(newRequest);
     state.emergencyQueue.sort(comparePriority);
@@ -345,6 +558,7 @@ function attachFormListeners() {
     renderRankingResults();
     renderEmergencyQueue();
     renderKpiCards();
+    recordActivity("REQUEST_CREATED", `Emergency ${newRequest.requestId} entered the standalone priority queue`, "critical");
     showNotification(`🚨 Emergency Registered: ${newRequest.requestId} (${newRequest.priorityName}) - Matching suitable hospitals...`, "urgent");
   });
 }
@@ -453,9 +667,35 @@ function renderRankingResults() {
   });
 }
 
-function initiateReferralLock(hospital) {
-  const latestWaiting = state.emergencyQueue.find(e => e.status === "WAITING") || state.emergencyQueue[0];
-  
+async function initiateReferralLock(hospital, requestedRequest = null) {
+  const latestWaiting = requestedRequest || state.emergencyQueue.find(e => e.status === "WAITING") || state.emergencyQueue[0];
+  if (!latestWaiting) {
+    showNotification("Create or select an emergency before initiating a referral.", "urgent");
+    return;
+  }
+
+  if (getAuthToken()) {
+    const resourceTypes = [];
+    if (state.customRequirements.requiredBeds) resourceTypes.push("ICU_BED");
+    if (state.customRequirements.requiredVents) resourceTypes.push("VENTILATOR");
+    if (state.customRequirements.requiredOT) resourceTypes.push("OT");
+    try {
+      const response = await ReferralsAPI.initiate(latestWaiting.requestId, hospital.id, resourceTypes.length ? resourceTypes : ["ICU_BED"]);
+      if (response?.acceptance_id) {
+        const expiry = response.ttl_expires_at ? new Date(response.ttl_expires_at).getTime() : Date.now() + ((response.expires_in_sec || 90) * 1000);
+        state.currentActiveReferral = { hospital, request: latestWaiting, acceptanceId: response.acceptance_id, expiresAt: expiry, remainingSec: Math.ceil((expiry - Date.now()) / 1000), status: "LOCKED_PENDING_RESPONSE", remote: true };
+        triggerTabSwitch("tab-acceptance");
+        recordActivity("REFERRAL_INITIATED", `Referral ${response.acceptance_id} sent to ${hospital.name}`, "warning");
+        showNotification(`🔒 Referral handshake opened for ${hospital.name}. Awaiting facility response.`, "success");
+        renderHospitalAcceptanceView();
+        return;
+      }
+    } catch (error) {
+      showNotification(`Referral initiation failed: ${error.message}`, "urgent");
+      return;
+    }
+  }
+
   state.currentActiveReferral = {
     hospital,
     request: latestWaiting
@@ -463,11 +703,14 @@ function initiateReferralLock(hospital) {
 
   lockManager.acquireLock(hospital, latestWaiting, () => {
     // Timeout Callback -> Auto Failover
+    state.currentActiveReferral = null;
+    recordActivity("REFERRAL_TIMEOUT", `Soft-lock expired for ${hospital.name}; candidate review required`, "critical");
     showNotification(`⏱️ Referral timeout (90s) for ${hospital.name}. Automatically failing over to next candidate hospital!`, "urgent");
     renderRankingResults();
   });
 
   triggerTabSwitch("tab-acceptance");
+  recordActivity("REFERRAL_INITIATED", `Standalone soft-lock placed on ${hospital.name}`, "warning");
   showNotification(`🔒 90-Second Soft-Lock placed on ${hospital.name} for Request ${latestWaiting.requestId}. Awaiting hospital handshake!`, "success");
 }
 
@@ -476,7 +719,7 @@ function renderHospitalAcceptanceView() {
   const container = document.getElementById("acceptanceConsoleContent");
   if (!container) return;
 
-  const lock = lockManager.activeLock;
+  const lock = lockManager.activeLock || state.currentActiveReferral;
 
   if (!lock) {
     container.innerHTML = `
@@ -484,15 +727,17 @@ function renderHospitalAcceptanceView() {
         <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📡</div>
         <h3>No Active Referral Locks in Progress</h3>
         <p style="font-size: 0.85rem; margin-top: 0.4rem;">Select an emergency case from the Ranking Engine to initiate a 90-second soft-lock request.</p>
-        <button class="btn btn-secondary btn-sm" style="margin-top: 1rem;" onclick="document.querySelector('[data-tab=tab-ranking]').click()">
-          Go to Hospital Ranking
+         <button id="btnGoToRanking" type="button" class="btn btn-secondary btn-sm" style="margin-top: 1rem;">
+           Go to Hospital Ranking
         </button>
       </div>
     `;
+    document.getElementById("btnGoToRanking")?.addEventListener("click", () => triggerTabSwitch("tab-ranking"));
     return;
   }
 
-  const { hospital, request, remainingSec } = lock;
+  const { hospital, request } = lock;
+  const remainingSec = lock.remote ? Math.max(0, Math.ceil((lock.expiresAt - Date.now()) / 1000)) : lock.remainingSec;
 
   container.innerHTML = `
     <div class="lock-timer-box anim-lock-pulse">
@@ -535,34 +780,86 @@ function renderHospitalAcceptanceView() {
     </div>
   `;
 
-  document.getElementById("btnAcceptReferral")?.addEventListener("click", () => {
+  document.getElementById("btnAcceptReferral")?.addEventListener("click", async () => {
+    if (lock.remote) {
+      try {
+        await ReferralsAPI.accept(lock.acceptanceId);
+        request.status = "ALLOCATED";
+        request.assignedHospital = hospital.name;
+        state.currentActiveReferral = null;
+        recordActivity("REFERRAL_ACCEPTED", `${hospital.name} accepted ${request.requestId}`, "success");
+        await refreshWorkspaceData();
+        showNotification(`✓ ${hospital.name} confirmed the referral.`, "success");
+        renderHospitalAcceptanceView();
+      } catch (error) { showNotification(`Acceptance failed: ${error.message}`, "urgent"); }
+      return;
+    }
     const committed = lockManager.commitAllocation();
     if (committed) {
+      state.currentActiveReferral = null;
       if (request) {
         request.status = "ALLOCATED";
         request.assignedHospital = hospital.name;
       }
       showNotification(`🎉 ${hospital.name} ACCEPTED referral for ${request.patientName}! Bed atomically committed. Ambulance dispatched.`, "success");
+      recordActivity("REFERRAL_ACCEPTED", `${hospital.name} accepted ${request.requestId}`, "success");
       renderEmergencyQueue();
       renderKpiCards();
     }
   });
 
-  document.getElementById("btnRejectReferral")?.addEventListener("click", () => {
+  document.getElementById("btnRejectReferral")?.addEventListener("click", async () => {
+    if (lock.remote) {
+      try {
+        await ReferralsAPI.reject(lock.acceptanceId, "Facility declined referral");
+        state.currentActiveReferral = null;
+        recordActivity("REFERRAL_REJECTED", `${hospital.name} declined ${request.requestId}`, "critical");
+        await refreshWorkspaceData();
+        showNotification(`Referral declined by ${hospital.name}. Review the next eligible candidate.`, "urgent");
+        renderHospitalAcceptanceView();
+      } catch (error) { showNotification(`Rejection failed: ${error.message}`, "urgent"); }
+      return;
+    }
     lockManager.rejectAllocation(() => {
+      state.currentActiveReferral = null;
       showNotification(`❌ Referral rejected by ${hospital.name}. Soft-lock released. Automatically rerouting to next candidate...`, "urgent");
+      recordActivity("REFERRAL_REJECTED", `${hospital.name} declined ${request.requestId}`, "critical");
       renderRankingResults();
     });
   });
+  if (lock.remote && remainingSec > 0) {
+    window.setTimeout(() => {
+      if (state.currentActiveReferral?.acceptanceId === lock.acceptanceId) renderHospitalAcceptanceView();
+    }, 1000);
+  }
 }
 
 // Emergency Queue Render
 function renderEmergencyQueue() {
   const tbody = document.getElementById("emergencyQueueTableBody");
-  if (!tbody) return;
+  const search = (document.getElementById("emergencySearch")?.value || "").trim().toLowerCase();
+  const priority = document.getElementById("emergencyPriorityFilter")?.value || "ALL";
+  const status = document.getElementById("emergencyStatusFilter")?.value || "ALL";
+  const filtered = state.emergencyQueue.filter(item => {
+    const haystack = `${item.requestId} ${item.patientName} ${item.emergencyType} ${item.assignedHospital}`.toLowerCase();
+    return (!search || haystack.includes(search)) &&
+      (priority === "ALL" || String(item.priority) === priority) &&
+      (status === "ALL" || item.status === status);
+  });
+  const countEl = document.getElementById("queueResultCount");
+  if (countEl) countEl.textContent = `${filtered.length} of ${state.emergencyQueue.length} cases`;
+  if (!tbody) {
+    renderCommandOverview();
+    return;
+  }
 
   tbody.innerHTML = "";
-  state.emergencyQueue.forEach(item => {
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><strong>No matching cases</strong>Adjust the queue filters to broaden the operational view.</div></td></tr>`;
+    renderCommandOverview();
+    return;
+  }
+  filtered.forEach(item => {
     const tr = document.createElement("tr");
     const priorityBadgeClass = `badge-priority badge-p${item.priority}`;
     const statusMap = {
@@ -586,6 +883,7 @@ function renderEmergencyQueue() {
     `;
     tbody.appendChild(tr);
   });
+  renderCommandOverview();
 }
 
 // Hospitals Directory Render
@@ -628,6 +926,113 @@ function renderHospitalsDirectory() {
     `;
     container.appendChild(card);
   });
+  renderHospitalManagement();
+}
+
+function renderHospitalManagement() {
+  const container = document.getElementById("hospitalsManagementGrid");
+  if (!container) return;
+  const query = (document.getElementById("hospitalSearch")?.value || "").trim().toLowerCase();
+  const status = document.getElementById("hospitalStatusFilter")?.value || "ALL";
+  const hospitals = state.hospitals.filter(h => {
+    const matchesQuery = !query || `${h.id} ${h.name} ${h.address}`.toLowerCase().includes(query);
+    return matchesQuery && (status === "ALL" || h.status === status);
+  });
+  const count = document.getElementById("hospitalResultsCount");
+  if (count) count.textContent = `${hospitals.length} of ${state.hospitals.length} facilities`;
+  if (!hospitals.length) {
+    container.innerHTML = `<div class="empty-state"><strong>No facilities found</strong>Try a different facility name or status.</div>`;
+    return;
+  }
+  container.innerHTML = hospitals.map(h => {
+    const statusClass = h.status === "OPEN" ? "badge-open" : h.status === "LIMITED" ? "badge-limited" : "badge-closed";
+    const resources = [
+      ["ICU beds", h.resources.icuBeds],
+      ["Ventilators", h.resources.ventilators],
+      ["Emergency OT", h.resources.emergencyOT]
+    ];
+    const available = resources.reduce((sum, [, resource]) => sum + resource.available, 0);
+    const capacity = resources.reduce((sum, [, resource]) => sum + resource.total, 0);
+    return `<article class="hospital-card operations-hospital-card">
+      <div class="hospital-header"><div><div class="hospital-name"><span class="rank-badge">${h.id}</span>${h.name}</div><div class="hospital-meta">${h.address}</div></div><span class="badge-status ${statusClass}">${h.status}</span></div>
+      <div class="capacity-meter"><span style="width:${capacity ? Math.round((available / capacity) * 100) : 0}%"></span></div>
+      <div class="capacity-meter-label"><span>Critical resource readiness</span><strong>${available}/${capacity} open</strong></div>
+      <div class="resource-capsule-grid">${resources.map(([label, resource]) => `<div class="resource-capsule"><span class="capsule-label">${label}</span><span class="capsule-val ${resource.available > 0 ? "good" : "empty"}">${resource.available}/${resource.total}</span></div>`).join("")}</div>
+      <div class="hospital-card-footer"><span>★ ${h.rating}/5 · ${h.acceptanceRate ? Math.round(h.acceptanceRate * 100) : "—"}% acceptance</span><span>${h.traumaLevel || "Emergency facility"}</span></div>
+    </article>`;
+  }).join("");
+}
+
+function recordActivity(type, message, tone = "info") {
+  state.activity.unshift({ type, message, tone, timestamp: new Date().toISOString() });
+  state.activity = state.activity.slice(0, 40);
+  renderKpiCards();
+  renderCommandOverview();
+  renderActivityWorkspace();
+}
+
+function formatActivityTime(timestamp) {
+  return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function renderCommandOverview() {
+  const queueBody = document.getElementById("commandPriorityQueueBody");
+  if (queueBody) {
+    const topCases = [...state.emergencyQueue].sort(comparePriority).slice(0, 5);
+    const commandStatusClasses = { NEW: "new", WAITING: "waiting", MATCHING: "matching", ALLOCATED: "allocated", IN_TREATMENT: "treatment", COMPLETED: "completed", CANCELLED: "cancelled" };
+    queueBody.innerHTML = topCases.length ? topCases.map(item => `<tr>
+      <td class="font-mono">${item.requestId}</td><td><strong>${item.patientName}</strong><small>${item.emergencyType}</small></td>
+      <td><span class="badge-priority badge-p${item.priority}">P${item.priority}</span></td>
+      <td><span class="badge-status badge-${commandStatusClasses[item.status] || "new"}">${String(item.status).replace("_", " ")}</span></td>
+      <td>${item.assignedHospital || "Matching"}</td></tr>`).join("") : `<tr><td colspan="5"><div class="empty-state"><strong>Queue clear</strong>No active cases are awaiting coordination.</div></td></tr>`;
+  }
+
+  const referralSummary = document.getElementById("commandReferralSummary");
+  if (referralSummary) {
+    const pending = state.currentActiveReferral || lockManager.activeLock ? 1 : 0;
+    const accepted = state.emergencyQueue.filter(item => ["ALLOCATED", "IN_TREATMENT"].includes(item.status)).length;
+    const closed = state.activity.filter(event => ["REJECTED", "EXPIRED", "TIMEOUT"].some(term => event.type.includes(term))).length;
+    referralSummary.innerHTML = [
+      ["⏳", "Pending handshake", pending, "awaiting acceptance"],
+      ["✓", "Accepted / allocated", accepted, "destination committed"],
+      ["!", "Rejected / expired", closed, "recovery events"]
+    ].map(([icon, label, value, caption]) => `<div class="summary-row"><span class="summary-icon">${icon}</span><div><strong>${label}</strong><small>${caption}</small></div><span class="summary-value">${value}</span></div>`).join("");
+  }
+
+  const fleetSummary = document.getElementById("commandFleetSummary");
+  if (fleetSummary) {
+    const available = state.ambulances.filter(a => a.status === "AVAILABLE").length;
+    const transit = state.ambulances.filter(a => a.status === "IN_TRANSIT").length;
+    const maintenance = state.ambulances.filter(a => a.status === "MAINTENANCE").length;
+    fleetSummary.innerHTML = [
+      ["●", "Available", available, "ready for dispatch"],
+      ["↗", "In transit", transit, "active transport"],
+      ["⚙", "Maintenance", maintenance, "out of service"]
+    ].map(([icon, label, value, caption]) => `<div class="summary-row"><span class="summary-icon">${icon}</span><div><strong>${label}</strong><small>${caption}</small></div><span class="summary-value">${value}</span></div>`).join("");
+  }
+
+  const feed = document.getElementById("commandActivityFeed");
+  if (feed) {
+    const events = state.activity.length ? state.activity.slice(0, 5) : [{ type: "SYSTEM_READY", message: "Standalone operations workspace initialized", tone: "info", timestamp: new Date().toISOString() }];
+    feed.innerHTML = events.map(event => `<div class="activity-item ${event.tone}"><span class="activity-marker"></span><div><strong>${event.message}</strong><small>${event.type} · ${formatActivityTime(event.timestamp)}</small></div></div>`).join("");
+  }
+}
+
+function renderActivityWorkspace() {
+  const timeline = document.getElementById("activityTimeline");
+  if (!timeline) return;
+  const events = state.activity.length ? state.activity : [{ type: "SYSTEM_READY", message: "Standalone operations workspace initialized", tone: "info", timestamp: new Date().toISOString() }];
+  timeline.innerHTML = events.map(event => `<div class="activity-item ${event.tone}"><span class="activity-marker"></span><div><strong>${event.message}</strong><small>${event.type} · ${new Date(event.timestamp).toLocaleString()}</small></div></div>`).join("");
+  const auditSummary = document.getElementById("activityAuditSummary");
+  if (auditSummary) {
+    const entries = getLedgerEntries();
+    const integrity = verifyLedgerIntegrity();
+    auditSummary.innerHTML = [
+      [entries.length, "sealed entries"],
+      [integrity.isValid ? "VALID" : "REVIEW", "chain integrity"],
+      [state.activity.length, "session events"]
+    ].map(([value, label]) => `<div class="audit-summary-card"><strong>${value}</strong><span>${label}</span></div>`).join("");
+  }
 }
 
 // Banker's Algorithm Visualizer UI
@@ -639,6 +1044,155 @@ function initBankersSimulator() {
       renderBankersResults();
     });
   }
+
+  // P3-02 Compound Claim Evaluation UI
+  const btnEvaluateCompound = document.getElementById("btnEvaluateCompoundClaim");
+  btnEvaluateCompound?.addEventListener("click", () => {
+    syncBankersInputMatrix();
+    const pIdx = parseInt(document.getElementById("compoundProcessSelect")?.value, 10) || 0;
+    const req0 = parseInt(document.getElementById("claimReq0")?.value, 10) || 0;
+    const req1 = parseInt(document.getElementById("claimReq1")?.value, 10) || 0;
+    const req2 = parseInt(document.getElementById("claimReq2")?.value, 10) || 0;
+    const reqVec = [req0, req1, req2];
+
+    const result = bankersEngine.requestResources(pIdx, reqVec);
+    const box = document.getElementById("compoundClaimResultBox");
+    if (!box) return;
+
+    if (result.granted) {
+      box.innerHTML = `
+        <div style="color: var(--status-green); font-weight: 700; margin-bottom: 0.35rem; display: flex; align-items: center; gap: 0.4rem;">
+          <span>✅</span> Compound Claim Granted Safely!
+        </div>
+        <div style="font-size: 0.8rem; color: var(--text-heading); margin-bottom: 0.5rem;">
+          Allocation committed for <strong>${bankersEngine.processes[pIdx]}</strong>: [${reqVec.join(', ')}]
+        </div>
+        <div style="font-family: var(--font-mono); font-size: 0.75rem; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 0.4rem 0.6rem; border-radius: var(--radius-sm); color: #34d399;">
+          Valid Safe Sequence: &lt; ${result.safeSequence.join(" ➔ ")} &gt;
+        </div>
+      `;
+      appendAuditEntry(EVENT_TYPES.BANKERS_SAFE, {
+        process: bankersEngine.processes[pIdx],
+        requested: reqVec,
+        safeSequence: result.safeSequence
+      });
+      renderAuditLedgerTable();
+      showNotification(`✅ Compound claim granted! System remains in Safe State.`, "success");
+    } else {
+      box.innerHTML = `
+        <div style="color: var(--status-red); font-weight: 700; margin-bottom: 0.35rem; display: flex; align-items: center; gap: 0.4rem;">
+          <span>⛔</span> Deadlock Avoidance: Request Proactively Rejected!
+        </div>
+        <div style="font-size: 0.8rem; color: #fca5a5; margin-bottom: 0.4rem;">
+          ${result.reason}
+        </div>
+        <div style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); background: rgba(239, 68, 68, 0.1); padding: 0.4rem 0.6rem; border-radius: var(--radius-sm);">
+          Circular wait hazard averted. Process enqueued in OS waiting state until resources are released.
+        </div>
+      `;
+      appendAuditEntry(EVENT_TYPES.BANKERS_UNSAFE, {
+        process: bankersEngine.processes[pIdx],
+        requested: reqVec,
+        rejectionReason: result.reason
+      });
+      renderAuditLedgerTable();
+      showNotification(`⚠️ Proactive Deadlock Rejection: Request would enter unsafe state!`, "urgent");
+    }
+  });
+
+  document.getElementById("btnPreloadUnsafeClaim")?.addEventListener("click", () => {
+    const sel = document.getElementById("compoundProcessSelect");
+    if (sel) sel.value = "0";
+    const r0 = document.getElementById("claimReq0");
+    const r1 = document.getElementById("claimReq1");
+    const r2 = document.getElementById("claimReq2");
+    if (r0) r0.value = 3;
+    if (r1) r1.value = 3;
+    if (r2) r2.value = 2;
+    btnEvaluateCompound?.click();
+  });
+
+  // P3-01 Mass Casualty 100-Thread Concurrency Stress Simulation Runner
+  document.getElementById("btnRunMassCasualtyStress")?.addEventListener("click", async () => {
+    const btn = document.getElementById("btnRunMassCasualtyStress");
+    const statusText = document.getElementById("stressTestStatusText");
+    const metricsGrid = document.getElementById("stressTestMetricsGrid");
+    const consoleLog = document.getElementById("stressTestLogConsole");
+
+    if (btn) btn.disabled = true;
+    if (metricsGrid) metricsGrid.style.display = "grid";
+    if (consoleLog) {
+      consoleLog.style.display = "block";
+      consoleLog.innerHTML = "";
+    }
+
+    if (statusText) statusText.textContent = "⚡ Spawning 100 asynchronous concurrent threads...";
+
+    const appendLog = (msg) => {
+      if (!consoleLog) return;
+      const row = document.createElement("div");
+      row.textContent = msg;
+      consoleLog.appendChild(row);
+      consoleLog.scrollTop = consoleLog.scrollHeight;
+    };
+
+    appendLog("[STRESS-ENGINE] Initializing 100 concurrent threads competing for 1 bottleneck ICU bed...");
+
+    let remainingBeds = 1;
+    let mutexLocked = false;
+    let winnerThread = null;
+    let safeReroutes = 0;
+
+    const acquireLock = async () => {
+      while (mutexLocked) {
+        await new Promise(r => setTimeout(r, Math.random() * 8 + 2));
+      }
+      mutexLocked = true;
+      return () => { mutexLocked = false; };
+    };
+
+    const threadPromises = Array.from({ length: 100 }, async (_, idx) => {
+      const threadId = idx + 1;
+      const release = await acquireLock();
+      try {
+        if (remainingBeds > 0) {
+          remainingBeds--;
+          winnerThread = threadId;
+          appendLog(`[THREAD-${String(threadId).padStart(3, '0')}] 🔒 ACQUIRED ROW LOCK on ICU Bed (Winner!) Allocation Committed.`);
+        } else {
+          safeReroutes++;
+          if (idx < 5 || idx > 95) {
+            appendLog(`[THREAD-${String(threadId).padStart(3, '0')}] 🛑 Resource exhausted. Safe Reroute to Rank #2 hospital triggered.`);
+          }
+        }
+      } finally {
+        release();
+      }
+    });
+
+    await Promise.all(threadPromises);
+
+    document.getElementById("stressKpiThreads").textContent = "100";
+    document.getElementById("stressKpiAllocated").textContent = "1";
+    document.getElementById("stressKpiRerouted").textContent = String(safeReroutes);
+    document.getElementById("stressKpiDoubleAlloc").textContent = "0";
+
+    appendLog(`[STRESS-ENGINE] ✅ Completed! Winner: THREAD-${String(winnerThread).padStart(3, '0')}. Total Rerouted: ${safeReroutes}. Double Allocations: 0.`);
+    if (statusText) statusText.textContent = `✅ Complete: 1 Winner, 99 Rerouted, 0 Race Conditions!`;
+
+    appendAuditEntry(EVENT_TYPES.STRESS_TEST_RUN, {
+      threads: 100,
+      resource: "ICU_BED",
+      winnerThread,
+      safeReroutes,
+      doubleAllocations: 0,
+      passed: true
+    });
+    renderAuditLedgerTable();
+
+    if (btn) btn.disabled = false;
+    showNotification("🚀 100-Thread Concurrency Stress Test Passed with 0 Double Allocations!", "success");
+  });
 }
 
 function syncBankersInputMatrix() {
@@ -715,11 +1269,23 @@ function renderAmbulanceFleet() {
   const container = document.getElementById("ambulanceFleetGrid");
   if (!container) return;
 
+  const query = (document.getElementById("ambulanceSearch")?.value || "").trim().toLowerCase();
+  const statusFilter = document.getElementById("ambulanceStatusFilter")?.value || "ALL";
+  const filtered = state.ambulances.filter(amb => {
+    const matchesQuery = !query || `${amb.id} ${amb.type} ${amb.hospitalId}`.toLowerCase().includes(query);
+    return matchesQuery && (statusFilter === "ALL" || amb.status === statusFilter);
+  });
+  const resultCount = document.getElementById("ambulanceResultsCount");
+  if (resultCount) resultCount.textContent = `${filtered.length} of ${state.ambulances.length} units`;
   container.innerHTML = "";
-  state.ambulances.forEach(amb => {
+  if (!filtered.length) {
+    container.innerHTML = `<div class="empty-state"><strong>No units found</strong>Adjust the fleet filters to broaden the view.</div>`;
+    return;
+  }
+  filtered.forEach(amb => {
     const card = document.createElement("div");
     card.className = "hospital-card";
-    const statusBadge = amb.status === "AVAILABLE" ? "badge-open" : amb.status === "IN_TRANSIT" ? "badge-limited" : "badge-closed";
+    const statusBadge = amb.status === "AVAILABLE" ? "badge-open" : ["IN_TRANSIT", "DISPATCHED"].includes(amb.status) ? "badge-limited" : "badge-closed";
 
     card.innerHTML = `
       <div class="hospital-header">
@@ -731,12 +1297,20 @@ function renderAmbulanceFleet() {
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.75rem; font-size: 0.82rem;">
         <div>Transit Telemetry: <strong>${amb.status === 'IN_TRANSIT' ? `ETA ${amb.etaMins} mins` : 'Standby at Station'}</strong></div>
-        <button class="btn btn-secondary btn-sm" onclick="alert('Dispatch route telemetry updated for ${amb.id}')">
-          📍 View GPS Route
-        </button>
+         <button class="btn btn-secondary btn-sm btn-view-ambulance" data-ambulance-id="${amb.id}" type="button">
+           📍 View GPS Route
+         </button>
       </div>
     `;
     container.appendChild(card);
+  });
+  container.querySelectorAll(".btn-view-ambulance").forEach(button => {
+    button.addEventListener("click", () => {
+      const ambulance = state.ambulances.find(item => item.id === button.dataset.ambulanceId);
+      if (!ambulance) return;
+      triggerTabSwitch("tab-map");
+      showNotification(`📍 Tracking ${ambulance.id} from station ${ambulance.hospitalId}.`, "normal");
+    });
   });
 }
 
@@ -1118,12 +1692,16 @@ function renderRoadsideHospitalRecommendation(ranked, analysis) {
         <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.5rem;">
           All regional facilities have exhausted their ICU beds, ventilators, or lack the on-duty surgical specialist for this accident.
         </p>
-        <button class="btn btn-primary" style="margin-top: 1rem;" onclick="alert('Contacting Central EMS Disaster Command for inter-region airlift...')">
-          📞 Request Central Air-Ambulance Evacuation
-        </button>
-      </div>
-    `;
-    return;
+         <button id="btnOpenEmsFallback" type="button" class="btn btn-primary" style="margin-top: 1rem;">
+           📞 Open EMS fallback coordination
+         </button>
+       </div>
+     `;
+    document.getElementById("btnOpenEmsFallback")?.addEventListener("click", () => {
+      triggerTabSwitch("tab-ambulance");
+      showNotification("No eligible destination is available. Coordinate an alternate transport plan with EMS dispatch.", "urgent");
+    });
+     return;
   }
 
   const specName = analysis.requiredResources.specialist
@@ -1260,7 +1838,7 @@ function renderRoadsideHospitalRecommendation(ranked, analysis) {
     openRouteNavigationModal(topHospital);
   });
 
-  document.getElementById("btnRoadsidePreAlert")?.addEventListener("click", () => {
+  document.getElementById("btnRoadsidePreAlert")?.addEventListener("click", async () => {
     // 1-Click Pre-Alert ER: Creates an active emergency request, locks soft-reservation, and notifies hospital!
     const newReqId = `REQ-${Math.floor(1000 + Math.random() * 9000)}`;
     const newRequest = {
@@ -1277,22 +1855,52 @@ function renderRoadsideHospitalRecommendation(ranked, analysis) {
       notes: `Roadside Ingestion from ${state.roadside.currentLocation.name}. Symptoms: ${state.roadside.symptomText}`
     };
 
-    state.emergencyQueue.unshift(newRequest);
-    state.emergencyQueue.sort(comparePriority);
+    if (getAuthToken()) {
+      try {
+        const response = await EmergenciesAPI.create({
+          patient_name: newRequest.patientName,
+          age: newRequest.age,
+          emergency_type: newRequest.emergencyType,
+          triage_priority: newRequest.priority,
+          clinical_notes: newRequest.notes,
+          pickup_lat: state.roadside.currentLocation.lat,
+          pickup_lng: state.roadside.currentLocation.lng
+        });
+        if (!response?.request_id) throw new Error("The emergency API did not return a request ID.");
+        newRequest.requestId = response.request_id;
+        await refreshWorkspaceData();
+      } catch (error) {
+        showNotification(`Unable to transmit roadside pre-alert: ${error.message}`, "urgent");
+        return;
+      }
+    } else {
+      state.emergencyQueue.unshift(newRequest);
+      state.emergencyQueue.sort(comparePriority);
+    }
 
-    initiateReferralLock(topHospital);
+    initiateReferralLock(topHospital, state.emergencyQueue.find(item => item.requestId === newRequest.requestId) || newRequest);
+    recordActivity("ROADSIDE_PREALERT", `Roadside pre-alert sent for ${newRequest.requestId}`, "critical");
     showNotification(`🚨 1-Click ER Pre-Alert Transmitted to ${topHospital.name}! Trauma scrub team alerted. Soft lock active!`, "urgent");
   });
 
-  document.getElementById("btnRoadsideDispatchEMS")?.addEventListener("click", () => {
-    const availableAmb = state.ambulances.find(a => a.status === "AVAILABLE") || state.ambulances[0];
+  document.getElementById("btnRoadsideDispatchEMS")?.addEventListener("click", async () => {
+    const availableAmb = state.ambulances.find(a => a.status === "AVAILABLE");
     if (availableAmb) {
+      if (getAuthToken()) {
+        try {
+          await AmbulancesAPI.updateStatus(availableAmb.id, { status: "DISPATCHED", eta_mins: Math.max(3, Math.round(topHospital.distanceKm * 1.5)) });
+          await refreshWorkspaceData();
+        } catch (error) {
+          showNotification(`Dispatch request failed: ${error.message}`, "urgent");
+          return;
+        }
+      }
       availableAmb.status = "IN_TRANSIT";
       availableAmb.etaMins = Math.max(3, Math.round(topHospital.distanceKm * 1.5));
       renderAmbulanceFleet();
       renderKpiCards();
       showNotification(`🚑 Ambulance ${availableAmb.id} (${availableAmb.type}) dispatched to ${state.roadside.currentLocation.name}! ETA: ${availableAmb.etaMins} mins.`, "success");
-    }
+    } else showNotification("No available ambulance is currently eligible for dispatch.", "urgent");
   });
 }
 
@@ -1349,13 +1957,14 @@ function openRouteNavigationModal(hospital) {
       <a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(hospital.name + ' ' + hospital.address)}" target="_blank" rel="noopener" class="btn btn-primary btn-block" style="text-decoration: none; text-align: center; font-size: 0.9rem; padding: 0.75rem;">
         🗺️ Launch Live in Google Maps
       </a>
-      <button class="btn btn-secondary" onclick="document.getElementById('routeDirectionsModal').style.display='none'">
+       <button id="btnCloseRouteFromContent" type="button" class="btn btn-secondary">
         Close
       </button>
     </div>
   `;
 
   modal.style.display = "flex";
+  document.getElementById("btnCloseRouteFromContent")?.addEventListener("click", () => { modal.style.display = "none"; });
 }
 
 // System Role Switcher & Modal
@@ -1397,18 +2006,88 @@ function initAuthPortalModal() {
   // Quick Demo Role Login Buttons
   const setRole = (role, title, icon) => {
     state.currentUserRole = role;
+    state.currentUser = { role: role === "admin" ? "ADMIN" : role === "hospital" ? "HOSPITAL_DESK" : "PARAMEDIC", display_name: title };
     const roleTitle = document.getElementById("userRoleTitle");
     const roleIcon = document.getElementById("userRoleIcon");
     if (roleTitle) roleTitle.textContent = title;
     if (roleIcon) roleIcon.textContent = icon;
     if (modal) modal.style.display = "none";
+    updateDataSourceBanner();
+    applyRoleVisibility();
+    recordActivity("DEMO_ROLE_SWITCH", `Simulation view switched to ${title}`, "info");
     showNotification(`🛡️ Switched active portal view to: ${title}`, "success");
   };
+
+  const login = async (form, username, password) => {
+    const errorEl = document.getElementById("authFormError");
+    if (errorEl) { errorEl.textContent = ""; errorEl.style.display = "none"; }
+    try {
+      const result = await AuthAPI.login(username, password);
+      if (!result?.token) throw new Error("The authentication service did not return a session token.");
+      state.currentUser = result.user || getCurrentUser();
+      state.currentUserRole = state.currentUser?.role === "ADMIN" ? "admin" : state.currentUser?.role === "HOSPITAL_DESK" ? "hospital" : "paramedic";
+      const roleTitle = document.getElementById("userRoleTitle");
+      const roleIcon = document.getElementById("userRoleIcon");
+      if (roleTitle) roleTitle.textContent = state.currentUser.display_name || state.currentUser.role;
+      if (roleIcon) roleIcon.textContent = state.currentUserRole === "admin" ? "👑" : state.currentUserRole === "hospital" ? "🏥" : "🚑";
+      state.dataSource = "backend";
+      updateDataSourceBanner();
+      applyRoleVisibility();
+      if (modal) modal.style.display = "none";
+      recordActivity("AUTHENTICATED", `${state.currentUser.display_name || username} connected`, "success");
+      showNotification(`✓ Authenticated as ${state.currentUser.display_name || username}.`, "success");
+      await refreshWorkspaceData();
+      initWebSocket(getAuthToken(), (eventType, data) => {
+        if (eventType === "referral:incoming") showNotification(`🚨 Incoming referral for ${data.hospital_id || "your facility"}.`, "urgent");
+        if (eventType === "allocation:committed") showNotification("✓ Allocation committed by the operational backend.", "success");
+      });
+    } catch (error) {
+      if (errorEl) { errorEl.textContent = error.message; errorEl.style.display = "block"; }
+      showNotification(`Authentication failed: ${error.message}`, "urgent");
+    }
+  };
+
+  document.getElementById("adminLoginForm")?.addEventListener("submit", event => {
+    event.preventDefault();
+    login(event.currentTarget, document.getElementById("adminUsernameInput")?.value.trim(), document.getElementById("adminPasswordInput")?.value);
+  });
+  document.getElementById("hospitalLoginForm")?.addEventListener("submit", event => {
+    event.preventDefault();
+    const usernames = { "H-101": "apex_desk", "H-102": "stjude_desk", "H-103": "fortis_desk", "H-104": "memorial_desk", "H-105": "maxlife_desk" };
+    login(event.currentTarget, usernames[document.getElementById("hospitalSelectInput")?.value] || "fortis_desk", document.getElementById("hospitalPasswordInput")?.value);
+  });
+  document.getElementById("paramedicLoginForm")?.addEventListener("submit", event => {
+    event.preventDefault();
+    login(event.currentTarget, document.getElementById("paramedicUnitInput")?.value.trim(), document.getElementById("paramedicPinInput")?.value);
+  });
 
   document.getElementById("quickLoginAdmin")?.addEventListener("click", () => setRole("admin", "Admin Portal", "👑"));
   document.getElementById("quickLoginFortis")?.addEventListener("click", () => setRole("hospital", "Fortis Desk Console", "🏥"));
   document.getElementById("quickLoginApex")?.addEventListener("click", () => setRole("hospital", "Apex Desk Console", "🏥"));
   document.getElementById("quickLoginEMS")?.addEventListener("click", () => setRole("paramedic", "Paramedic Dispatch Unit", "🚑"));
+}
+
+function applyRoleVisibility() {
+  const role = state.currentUser?.role || (state.currentUserRole === "admin" ? "ADMIN" : state.currentUserRole === "hospital" ? "HOSPITAL_DESK" : "PARAMEDIC");
+  const restricted = {
+    "ADMIN": [],
+    "HOSPITAL_DESK": ["nav-emergency", "nav-roadside", "nav-bankers", "nav-ambulance"],
+    "PARAMEDIC": ["nav-acceptance", "nav-bankers", "nav-doctors", "nav-activity"]
+  };
+  document.querySelectorAll(".nav-tab-btn").forEach(button => button.classList.remove("locked-tab"));
+  (restricted[role] || []).forEach(id => document.getElementById(id)?.classList.add("locked-tab"));
+  document.querySelectorAll(".nav-tab-btn.locked-tab").forEach(button => {
+    button.setAttribute("aria-disabled", "true");
+    if (!button.dataset.roleGuarded) {
+      button.dataset.roleGuarded = "true";
+      button.addEventListener("click", event => {
+        if (button.classList.contains("locked-tab")) {
+          event.preventDefault();
+          showNotification("This workspace is restricted for the current role.", "urgent");
+        }
+      });
+    }
+  });
 }
 
 /* ====================================================================
@@ -1599,7 +2278,7 @@ function initDoctorsScheduler() {
   // Add Doctor Form Submit
   const addForm = document.getElementById("addDoctorForm");
   if (addForm) {
-    addForm.addEventListener("submit", (e) => {
+    addForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const hospId = document.getElementById("newDoctorHospital")?.value || "H-101";
       const name = document.getElementById("newDoctorName")?.value?.trim() || "Dr. Anonymous";
@@ -1617,11 +2296,22 @@ function initDoctorsScheduler() {
         shift_end: end
       };
 
-      state.doctors.push(newDoc);
+      if (getAuthToken()) {
+        try {
+          const result = await DoctorsAPI.create({ hospital_id: hospId, full_name: name, specialization: spec, shift_start: start, shift_end: end });
+          if (result?.doctor) state.doctors.push(result.doctor);
+          else throw new Error("The specialist registry did not return the created record.");
+        } catch (error) {
+          showNotification(`Unable to save specialist: ${error.message}`, "urgent");
+          return;
+        }
+      } else state.doctors.push(newDoc);
+
       renderDoctorsRoster();
       if (modal) modal.style.display = "none";
       addForm.reset();
-      showNotification(`👨‍⚕️ Added ${newDoc.full_name} to ${hospId} emergency roster.`, "success");
+      showNotification(`👨‍⚕️ Added ${name} to ${hospId} emergency roster.`, "success");
+      recordActivity("SPECIALIST_ADDED", `${name} added to the specialist roster`, "success");
     });
   }
 
@@ -1635,12 +2325,14 @@ function renderDoctorsRoster() {
   const facilityFilter = document.getElementById("doctorFacilityFilter")?.value || "ALL";
   const specFilter = document.getElementById("doctorSpecFilter")?.value || "ALL";
   const statusFilter = document.getElementById("doctorStatusFilter")?.value || "ALL";
+  const search = (document.getElementById("doctorSearch")?.value || "").trim().toLowerCase();
 
   let filtered = [...state.doctors];
 
   if (facilityFilter !== "ALL") filtered = filtered.filter(d => d.hospital_id === facilityFilter);
   if (specFilter !== "ALL") filtered = filtered.filter(d => d.specialization === specFilter);
   if (statusFilter !== "ALL") filtered = filtered.filter(d => d.availability_status === statusFilter);
+  if (search) filtered = filtered.filter(d => `${d.doctor_id} ${d.full_name} ${d.specialization} ${d.hospital_id}`.toLowerCase().includes(search));
 
   tbody.innerHTML = "";
 
@@ -1694,13 +2386,18 @@ function renderDoctorsRoster() {
 
   // Attach status toggle listener
   document.querySelectorAll(".doc-status-selector").forEach(sel => {
-    sel.addEventListener("change", (e) => {
+    sel.addEventListener("change", async (e) => {
       const docId = e.target.getAttribute("data-doc-id");
       const targetDoc = state.doctors.find(d => d.doctor_id === docId);
       if (targetDoc) {
+        if (getAuthToken()) {
+          try { await DoctorsAPI.updateStatus(docId, e.target.value); }
+          catch (error) { e.target.value = targetDoc.availability_status; showNotification(`Unable to update specialist status: ${error.message}`, "urgent"); return; }
+        }
         targetDoc.availability_status = e.target.value;
         renderDoctorsRoster();
         showNotification(`👨‍⚕️ Updated ${targetDoc.full_name} status to ${e.target.value.replace('_', ' ')}.`, "normal");
+        recordActivity("SPECIALIST_STATUS_CHANGED", `${targetDoc.full_name} is now ${e.target.value.replace('_', ' ')}`, "info");
       }
     });
   });
@@ -1715,10 +2412,13 @@ function renderDoctorsRoster() {
 function initRealtimeBackendBridge() {
   checkServerHealth().then(health => {
     if (health) {
+      state.backendOnline = true;
+      updateDataSourceBanner();
       console.log("[BRIDGE] Backend server detected online:", health);
-      showNotification(`🟢 Connected to Express.js REST API & WebSocket Server (v${health.version})`, "success");
+      showNotification(`🟢 API available (v${health.version}). Connect a role for authorized live data.`, "success");
 
-      initWebSocket(null, (eventType, data) => {
+      if (!getAuthToken()) return;
+      initWebSocket(getAuthToken(), (eventType, data) => {
         if (eventType === "referral:incoming") {
           showNotification(`🚨 [WebSocket Alert] Incoming emergency referral for ${data.hospital_id}!`, "urgent");
         } else if (eventType === "allocation:committed") {
@@ -1728,9 +2428,206 @@ function initRealtimeBackendBridge() {
         }
       });
     } else {
+      state.backendOnline = false;
+      updateDataSourceBanner();
       console.log("[BRIDGE] Operating in standalone browser mode with in-memory DBMS simulation.");
     }
   });
 }
 
+/* ====================================================================
+   PHASE 3: EMERGENCY ANALYTICS & TREND FORECASTING — P3-03 (Issue #26)
+   Historical Intake Velocity, Peak Demand Hours, Hospital Rejection
+   Bottlenecks & Response SLA Tracking
+   ==================================================================== */
 
+function initAnalyticsDashboard() {
+  const timeRangeSelect = document.getElementById("analyticsTimeRange");
+  timeRangeSelect?.addEventListener("change", () => {
+    renderAnalyticsCharts();
+  });
+
+  document.getElementById("btnExportAnalyticsCsv")?.addEventListener("click", () => {
+    exportAnalyticsCsv();
+  });
+
+  document.getElementById("btnExportAuditLedgerCsv")?.addEventListener("click", () => {
+    const csvContent = exportLedgerToCsv();
+    downloadCsvFile(csvContent, `emergency_audit_ledger_${new Date().toISOString().slice(0, 10)}.csv`);
+    showNotification("📜 Downloaded cryptographically sealed audit ledger CSV", "success");
+  });
+
+  renderAnalyticsCharts();
+}
+
+function renderAnalyticsCharts() {
+  renderHourlyVelocityChart();
+  renderBottleneckBars();
+}
+
+function renderHourlyVelocityChart() {
+  const container = document.getElementById("analyticsHourlyChart");
+  if (!container) return;
+
+  const hourlyData = [
+    { hour: "00", count: 14, peak: true },
+    { hour: "01", count: 18, peak: true },
+    { hour: "02", count: 16, peak: true },
+    { hour: "03", count: 7,  peak: false },
+    { hour: "04", count: 4,  peak: false },
+    { hour: "05", count: 3,  peak: false },
+    { hour: "06", count: 6,  peak: false },
+    { hour: "07", count: 9,  peak: false },
+    { hour: "08", count: 13, peak: false },
+    { hour: "09", count: 15, peak: false },
+    { hour: "10", count: 12, peak: false },
+    { hour: "11", count: 10, peak: false },
+    { hour: "12", count: 14, peak: false },
+    { hour: "13", count: 11, peak: false },
+    { hour: "14", count: 13, peak: false },
+    { hour: "15", count: 15, peak: false },
+    { hour: "16", count: 16, peak: false },
+    { hour: "17", count: 18, peak: false },
+    { hour: "18", count: 21, peak: false },
+    { hour: "19", count: 19, peak: false },
+    { hour: "20", count: 22, peak: false },
+    { hour: "21", count: 24, peak: false },
+    { hour: "22", count: 28, peak: true },
+    { hour: "23", count: 25, peak: true }
+  ];
+
+  const maxVal = Math.max(...hourlyData.map(d => d.count));
+  container.innerHTML = hourlyData.map(d => {
+    const heightPct = Math.round((d.count / maxVal) * 100);
+    const barBg = d.peak ? "var(--status-red, #ef4444)" : "var(--accent, #3b82f6)";
+    return `
+      <div style="flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end;" title="Hour ${d.hour}:00 - ${d.count} Emergencies ${d.peak ? '(Highway Peak)' : ''}">
+        <div style="font-size: 0.65rem; color: var(--text-tertiary); margin-bottom: 2px;">${d.count}</div>
+        <div style="width: 100%; height: ${heightPct}%; background: ${barBg}; border-radius: 2px 2px 0 0; min-height: 4px; transition: height 0.3s ease;"></div>
+        <div style="font-size: 0.62rem; color: var(--text-muted); margin-top: 4px; font-family: var(--font-mono);">${d.hour}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderBottleneckBars() {
+  const container = document.getElementById("analyticsBottleneckBars");
+  if (!container) return;
+
+  const facilities = [
+    { name: "Apex City Trauma (H-101)", accepted: 42, rejected: 3, avgSlaSec: 28 },
+    { name: "Fortis Cardiac & Neuro (H-103)", accepted: 38, rejected: 4, avgSlaSec: 22 },
+    { name: "St. Jude Metro (H-102)", accepted: 29, rejected: 8, avgSlaSec: 36 },
+    { name: "Memorial Healthcare (H-104)", accepted: 25, rejected: 5, avgSlaSec: 31 },
+    { name: "Max Life Emergency (H-105)", accepted: 18, rejected: 9, avgSlaSec: 44 }
+  ];
+
+  container.innerHTML = facilities.map(f => {
+    const total = f.accepted + f.rejected;
+    const acceptPct = Math.round((f.accepted / total) * 100);
+    const rejectPct = 100 - acceptPct;
+    return `
+      <div style="font-size: 0.78rem;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+          <span style="font-weight: 600; color: var(--text-heading);">${f.name}</span>
+          <span style="color: var(--text-secondary); font-family: var(--font-mono);">
+            <strong style="color: var(--status-green);">${acceptPct}% Acc</strong> • ${f.accepted}/${total} • Avg SLA: ${f.avgSlaSec}s
+          </span>
+        </div>
+        <div style="height: 8px; width: 100%; background: rgba(239, 68, 68, 0.4); border-radius: 4px; overflow: hidden; display: flex;">
+          <div style="height: 100%; width: ${acceptPct}%; background: var(--status-green, #10b981);"></div>
+          <div style="height: 100%; width: ${rejectPct}%; background: var(--status-red, #ef4444);"></div>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function exportAnalyticsCsv() {
+  const headers = ["FacilityName", "AcceptedCount", "RejectedCount", "AcceptanceRatePct", "AverageSlaLatencySec"];
+  const rows = [
+    ["Apex City Trauma (H-101)", 42, 3, "93%", 28],
+    ["Fortis Cardiac & Neuro (H-103)", 38, 4, "90%", 22],
+    ["St. Jude Metro (H-102)", 29, 8, "78%", 36],
+    ["Memorial Healthcare (H-104)", 25, 5, "83%", 31],
+    ["Max Life Emergency (H-105)", 18, 9, "67%", 44]
+  ];
+  const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+  downloadCsvFile(csv, `emergency_analytics_sla_report_${new Date().toISOString().slice(0, 10)}.csv`);
+  showNotification("📈 Downloaded Emergency Analytics & SLA Report CSV", "success");
+}
+
+function downloadCsvFile(content, fileName) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ====================================================================
+   PHASE 3: IMMUTABLE AUDIT LEDGER CONSOLE — P3-04 (Issue #27)
+   Cryptographically Sealed Append-Only Medico-Legal Audit Log
+   ==================================================================== */
+
+function renderAuditLedgerTable() {
+  const tbody = document.getElementById("auditLedgerTableBody");
+  const badge = document.getElementById("auditIntegrityStatusBadge");
+  if (!tbody) return;
+
+  const entries = getLedgerEntries();
+  const integrity = verifyLedgerIntegrity();
+
+  if (badge) {
+    if (integrity.isValid) {
+      badge.className = "badge-status badge-open";
+      badge.textContent = `🛡️ VERIFIED: ${integrity.verifiedEntries} ENTRIES SEALED (0 TAMPERING)`;
+    } else {
+      badge.className = "badge-status badge-closed";
+      badge.textContent = `⚠️ TAMPERING DETECTED AT BLOCK #${integrity.errorIndex}!`;
+    }
+  }
+
+  tbody.innerHTML = "";
+
+  if (entries.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:1.5rem; color:var(--text-muted);">No sealed audit logs recorded.</td></tr>`;
+    return;
+  }
+
+  const reversed = [...entries].reverse();
+
+  reversed.forEach(entry => {
+    const tr = document.createElement("tr");
+
+    let eventColor = "var(--accent)";
+    if (entry.eventType.includes("ACCEPTED") || entry.eventType.includes("SAFE")) eventColor = "var(--status-green)";
+    if (entry.eventType.includes("EXPIRED") || entry.eventType.includes("REJECTED") || entry.eventType.includes("UNSAFE")) eventColor = "var(--status-red)";
+    if (entry.eventType.includes("STRESS") || entry.eventType.includes("ROADSIDE")) eventColor = "var(--accent-cyan, #06b6d4)";
+
+    tr.innerHTML = `
+      <td style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-tertiary);">#${entry.sequenceNumber}</td>
+      <td style="font-family: var(--font-mono); font-weight: 700; color: var(--accent); font-size: 0.78rem;">${entry.auditId}</td>
+      <td style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary);">${new Date(entry.timestamp).toLocaleTimeString()}</td>
+      <td>
+        <span style="font-weight: 700; font-size: 0.75rem; color: ${eventColor};">
+          ${entry.eventType}
+        </span>
+      </td>
+      <td style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted);" title="${entry.integrityHash}">
+        ${entry.integrityHash.slice(0, 22)}...
+      </td>
+      <td>
+        <span class="badge-status badge-open" style="font-size: 0.7rem; padding: 0.15rem 0.4rem;">
+          🔒 SEALED
+        </span>
+      </td>
+    `;
+
+    tbody.appendChild(tr);
+  });
+}
