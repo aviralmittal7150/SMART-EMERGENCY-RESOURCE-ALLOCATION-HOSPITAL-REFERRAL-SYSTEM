@@ -4,7 +4,7 @@
   "description": "Smart Emergency Resource Allocation & Hospital Referral System - OS + DBMS Engine",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/**/*.test.js",
+    "test": "node --test tests/*.test.js",
     "test:triage": "node --test tests/triage.test.js",
     "test:ranking": "node --test tests/ranking.test.js",
     "test:command": "node --test tests/command_center.test.js",
