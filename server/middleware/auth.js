@@ -3,15 +3,33 @@
 // Roles: ADMIN | HOSPITAL_DESK | PARAMEDIC
 
 import jwt from 'jsonwebtoken';
+import { randomBytes } from 'node:crypto';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'emergency-system-secret-key-2026';
-const JWT_EXPIRES = process.env.JWT_EXPIRES || '8h';
+// No hardcoded fallback: a publicly known signing key would let anyone forge ADMIN tokens.
+// Outside production an ephemeral per-process secret is used (tokens reset on restart).
+let ephemeralSecret = null;
+
+export function getJwtSecret() {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET must be set when NODE_ENV=production.');
+  }
+  if (!ephemeralSecret) {
+    ephemeralSecret = randomBytes(32).toString('hex');
+    console.warn('[AUTH] JWT_SECRET not set — using an ephemeral development secret.');
+  }
+  return ephemeralSecret;
+}
+
+function getJwtExpires() {
+  return process.env.JWT_EXPIRES || '8h';
+}
 
 /**
  * Generate a signed JWT for a verified user
  */
 export function generateToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: getJwtExpires() });
 }
 
 /**
@@ -25,7 +43,7 @@ export function authenticate(req, res, next) {
 
   const token = authHeader.slice(7);
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    req.user = jwt.verify(token, getJwtSecret());
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Token invalid or expired. Please re-authenticate.' });

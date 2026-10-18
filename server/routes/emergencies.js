@@ -8,13 +8,19 @@ import { db } from '../db/seed.js';
 
 const router = express.Router();
 
+// Hospital desks may only see cases referred to their own facility (patient data minimisation).
+function canViewRequest(user, requestId) {
+  if (user.role !== 'HOSPITAL_DESK') return true;
+  return db.hospitalAcceptances.some(a => a.request_id === requestId && a.hospital_id === user.hospital_id);
+}
+
 // ────────────────────────────────────────────────────────────
 // GET /api/v1/emergencies
 // Priority-queue ordered list of all emergencies
 // ────────────────────────────────────────────────────────────
 router.get('/', authenticate, (req, res) => {
   const { status } = req.query;
-  let requests = [...db.emergencyRequests];
+  let requests = db.emergencyRequests.filter(r => canViewRequest(req.user, r.request_id));
 
   if (status) requests = requests.filter(r => r.status === status.toUpperCase());
 
@@ -38,7 +44,9 @@ router.get('/', authenticate, (req, res) => {
 // ────────────────────────────────────────────────────────────
 router.get('/:requestId', authenticate, (req, res) => {
   const request = db.emergencyRequests.find(r => r.request_id === req.params.requestId);
-  if (!request) return res.status(404).json({ error: 'Emergency request not found.' });
+  if (!request || !canViewRequest(req.user, request.request_id)) {
+    return res.status(404).json({ error: 'Emergency request not found.' });
+  }
 
   const patient    = db.patients.find(p => p.patient_id === request.patient_id);
   const allocations = db.resourceAllocations.filter(a => a.request_id === req.params.requestId);
@@ -177,6 +185,9 @@ router.patch('/:requestId/status',
 // Full immutable audit trail for an emergency
 // ────────────────────────────────────────────────────────────
 router.get('/:requestId/audit', authenticate, (req, res) => {
+  if (!canViewRequest(req.user, req.params.requestId)) {
+    return res.status(404).json({ error: 'Emergency request not found.' });
+  }
   const events = db.emergencyHistory
     .filter(h => h.request_id === req.params.requestId)
     .sort((a, b) => new Date(a.event_time) - new Date(b.event_time));

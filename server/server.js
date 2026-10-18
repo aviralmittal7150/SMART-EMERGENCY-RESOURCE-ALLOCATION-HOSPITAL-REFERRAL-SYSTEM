@@ -29,7 +29,7 @@ import analyticsRoutes  from './routes/analytics.js';
 
 // Services
 import { lockingEngine } from './services/lockingEngine.js';
-import { authenticate }  from './middleware/auth.js';
+import { authenticate, getJwtSecret } from './middleware/auth.js';
 import { db }            from './db/seed.js';
 
 dotenv.config();
@@ -96,7 +96,14 @@ app.get('/health', (req, res) => {
 });
 
 // ── Static Frontend Serving ──
-app.use(express.static(rootDir));
+// Only frontend assets and the documents linked from the UI are public.
+// Never expose rootDir wholesale: it contains server source, tests and config.
+const PUBLIC_DOCS = ['PRD.md', 'WORKFLOW.md', 'AGENTS.md'];
+app.use('/css', express.static(path.join(rootDir, 'css')));
+app.use('/js', express.static(path.join(rootDir, 'js')));
+app.get('/', (req, res) => res.sendFile(path.join(rootDir, 'index.html')));
+app.get('/index.html', (req, res) => res.sendFile(path.join(rootDir, 'index.html')));
+PUBLIC_DOCS.forEach(doc => app.get(`/${doc}`, (req, res) => res.sendFile(path.join(rootDir, doc))));
 
 // ── 404 Handler for API Routes ──
 app.use('/api', (req, res) => {
@@ -138,7 +145,7 @@ io.use((socket, next) => {
     return next();
   }
   try {
-    socket.user = jwt.verify(token, process.env.JWT_SECRET || 'emergency-system-secret-key-2026');
+    socket.user = jwt.verify(token, getJwtSecret());
     next();
   } catch {
     socket.user = { role: 'GUEST', user_id: `GUEST-${socket.id.slice(0, 6)}` };
