@@ -6,6 +6,7 @@ import express from 'express';
 import { authenticate, authorize } from '../middleware/auth.js';
 import { lockingEngine } from '../services/lockingEngine.js';
 import { db } from '../db/seed.js';
+import { resolveEmergencyRequirements } from '../services/emergencyRequirements.js';
 
 const router = express.Router();
 
@@ -18,7 +19,7 @@ router.post('/initiate',
   authenticate,
   authorize('ADMIN', 'PARAMEDIC'),
   async (req, res) => {
-    const { request_id, hospital_id, resource_types = ['ICU_BED'] } = req.body;
+    const { request_id, hospital_id } = req.body;
 
     if (!request_id || !hospital_id) {
       return res.status(400).json({ error: 'request_id and hospital_id are required.' });
@@ -35,9 +36,31 @@ router.post('/initiate',
     const request = db.emergencyRequests.find(r => r.request_id === request_id);
     if (!request) return res.status(404).json({ error: 'Emergency request not found.' });
 
+    if (!['NEW', 'WAITING', 'MATCHING'].includes(request.status)) {
+      return res.status(409).json({ error: `Request is already in ${request.status} state and cannot receive a referral.` });
+    }
+
+    if (db.hospitalAcceptances.some(a => a.request_id === request_id && a.status === 'PENDING')) {
+      return res.status(409).json({ error: 'This request already has a pending hospital referral.' });
+    }
+
+    const requirements = resolveEmergencyRequirements(
+      request.emergency_type,
+      request.required_resource_types,
+      request.required_specialist
+    );
+    if (!requirements) return res.status(409).json({ error: 'Emergency requirements are invalid.' });
+
+    if (requirements.specialist && !db.doctors.some(doctor => doctor.hospital_id === hospital_id
+      && doctor.specialization === requirements.specialist
+      && doctor.availability_status === 'AVAILABLE')) {
+      return res.status(409).json({ error: `Required specialist ${requirements.specialist} is not available at ${hospital_id}.` });
+    }
+
     try {
-      const lock = await lockingEngine.acquireSoftLock(hospital_id, request_id, resource_types);
+      const lock = await lockingEngine.acquireSoftLock(hospital_id, request_id, requirements.resourceTypes);
       request.status = 'MATCHING';
+      request.updated_at = new Date().toISOString();
 
       res.status(201).json({
         success: true,
@@ -45,6 +68,8 @@ router.post('/initiate',
         acceptance_id: lock.acceptanceId,
         hospital_id,
         request_id,
+        resource_types: requirements.resourceTypes,
+        required_specialist: requirements.specialist,
         expires_in_sec: 90,
         ttl_expires_at: new Date(lock.expiresAt).toISOString()
       });
@@ -86,7 +111,7 @@ router.post('/:acceptanceId/accept',
 
       res.json({
         success: true,
-        message: `Referral accepted. Resources atomically committed. Ambulance dispatch initiated.`,
+        message: `Referral accepted. Resources atomically committed; EMS dispatch can now be assigned.`,
         ...result
       });
     } catch (err) {
@@ -134,10 +159,12 @@ router.post('/:acceptanceId/reject',
 // GET /api/v1/referrals/active
 // All currently active soft-locks
 // ────────────────────────────────────────────────────────────
-router.get('/active', authenticate, authorize('ADMIN'), (req, res) => {
+router.get('/active', authenticate, authorize('ADMIN', 'HOSPITAL_DESK'), (req, res) => {
+  const locks = lockingEngine.getActiveLocks().filter(lock => req.user.role !== 'HOSPITAL_DESK'
+    || lock.hospitalId === req.user.hospital_id);
   res.json({
     success: true,
-    active_locks: lockingEngine.getActiveLocks()
+    active_locks: locks
   });
 });
 

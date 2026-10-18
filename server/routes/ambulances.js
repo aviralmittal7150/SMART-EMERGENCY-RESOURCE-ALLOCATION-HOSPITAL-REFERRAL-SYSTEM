@@ -38,7 +38,7 @@ router.patch('/:ambulanceId/status',
   authenticate,
   authorize('ADMIN', 'PARAMEDIC', 'HOSPITAL_DESK'),
   (req, res) => {
-    const { status, current_lat, current_lng, eta_mins } = req.body;
+    const { status, request_id, current_lat, current_lng, eta_mins } = req.body;
 
     if (!VALID_STATUSES.includes(status)) {
       return res.status(400).json({ error: `Invalid status. Must be: ${VALID_STATUSES.join(', ')}` });
@@ -47,15 +47,56 @@ router.patch('/:ambulanceId/status',
     const amb = db.ambulances.find(a => a.ambulance_id === req.params.ambulanceId);
     if (!amb) return res.status(404).json({ error: 'Ambulance not found.' });
 
+    // Hospital desks may only manage units stationed at their own facility.
+    if (req.user.role === 'HOSPITAL_DESK' && req.user.hospital_id !== amb.hospital_id) {
+      return res.status(403).json({ error: 'You can only update ambulances stationed at your own facility.' });
+    }
+
+    // Validate every input before mutating anything, so a 4xx never leaves partial state.
+    let latitude;
+    let longitude;
+    let eta;
+    if (current_lat !== undefined) {
+      latitude = Number(current_lat);
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) return res.status(400).json({ error: 'current_lat must be a valid latitude.' });
+    }
+    if (current_lng !== undefined) {
+      longitude = Number(current_lng);
+      if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) return res.status(400).json({ error: 'current_lng must be a valid longitude.' });
+    }
+    if (eta_mins !== undefined) {
+      eta = Number(eta_mins);
+      if (!Number.isInteger(eta) || eta < 0) return res.status(400).json({ error: 'eta_mins must be a non-negative integer.' });
+    }
+
+    if (status === 'DISPATCHED') {
+      if (!request_id) return res.status(400).json({ error: 'request_id is required when dispatching an ambulance.' });
+      const request = db.emergencyRequests.find(item => item.request_id === request_id);
+      if (!request) return res.status(404).json({ error: 'Emergency request not found.' });
+      const accepted = db.hospitalAcceptances.some(a => a.request_id === request_id && a.status === 'ACCEPTED');
+      if (!['ALLOCATED', 'IN_TREATMENT'].includes(request.status) || !accepted) {
+        return res.status(409).json({ error: 'Ambulance dispatch requires an accepted emergency referral.' });
+      }
+      if (amb.status !== 'AVAILABLE') {
+        return res.status(409).json({ error: 'Ambulance is not available for dispatch.' });
+      }
+      const alreadyAssigned = db.ambulances.find(a => a.ambulance_id !== amb.ambulance_id && a.assigned_request_id === request_id);
+      if (alreadyAssigned) {
+        return res.status(409).json({ error: `Request ${request_id} already has ambulance ${alreadyAssigned.ambulance_id} assigned.` });
+      }
+    }
+
     const previous = amb.status;
     amb.status = status;
-    if (current_lat !== undefined) amb.current_lat = parseFloat(current_lat);
-    if (current_lng !== undefined) amb.current_lng = parseFloat(current_lng);
-    if (eta_mins    !== undefined) amb.eta_mins    = parseInt(eta_mins, 10);
+    if (status === 'DISPATCHED') amb.assigned_request_id = request_id;
+    if (status === 'AVAILABLE') delete amb.assigned_request_id;
+    if (latitude !== undefined) amb.current_lat = latitude;
+    if (longitude !== undefined) amb.current_lng = longitude;
+    if (eta !== undefined) amb.eta_mins = eta;
     amb.updated_at = new Date().toISOString();
 
     db.auditLog({
-      request_id: 'N/A',
+      request_id: status === 'DISPATCHED' ? request_id : null,
       hospital_id: amb.hospital_id,
       event_type: 'AMBULANCE_STATUS_CHANGED',
       previous_state: previous,

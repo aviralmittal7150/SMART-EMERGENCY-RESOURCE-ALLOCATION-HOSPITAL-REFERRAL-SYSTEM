@@ -81,6 +81,13 @@ router.get('/dashboard', authenticate, (req, res) => {
   });
 });
 
+// Acceptance rate over referrals the hospital could actually decide on.
+function acceptanceRate(referrals) {
+  const decidable = referrals.filter(a => a.status !== 'CANCELLED');
+  if (decidable.length === 0) return 0;
+  return Math.round((decidable.filter(a => a.status === 'ACCEPTED').length / decidable.length) * 100);
+}
+
 // GET /api/v1/analytics/referrals
 // Referral acceptance/rejection breakdown
 router.get('/referrals', authenticate, authorize('ADMIN'), (req, res) => {
@@ -89,6 +96,9 @@ router.get('/referrals', authenticate, authorize('ADMIN'), (req, res) => {
   const rejected = db.hospitalAcceptances.filter(a => a.status === 'REJECTED').length;
   const expired  = db.hospitalAcceptances.filter(a => a.status === 'EXPIRED').length;
   const pending  = db.hospitalAcceptances.filter(a => a.status === 'PENDING').length;
+  // CANCELLED means the case was cancelled/completed while the referral was pending;
+  // the hospital never had a chance to decide, so it is not counted against it.
+  const cancelled = db.hospitalAcceptances.filter(a => a.status === 'CANCELLED').length;
 
   const byHospital = db.hospitals.map(h => {
     const hospitalReferrals = db.hospitalAcceptances.filter(a => a.hospital_id === h.hospital_id);
@@ -99,15 +109,14 @@ router.get('/referrals', authenticate, authorize('ADMIN'), (req, res) => {
       accepted: hospitalReferrals.filter(a => a.status === 'ACCEPTED').length,
       rejected: hospitalReferrals.filter(a => a.status === 'REJECTED').length,
       expired:  hospitalReferrals.filter(a => a.status === 'EXPIRED').length,
-      acceptance_rate: hospitalReferrals.length > 0
-        ? Math.round((hospitalReferrals.filter(a => a.status === 'ACCEPTED').length / hospitalReferrals.length) * 100)
-        : 0
+      cancelled: hospitalReferrals.filter(a => a.status === 'CANCELLED').length,
+      acceptance_rate: acceptanceRate(hospitalReferrals)
     };
   });
 
   res.json({
     success: true,
-    summary: { total, accepted, rejected, expired, pending },
+    summary: { total, accepted, rejected, expired, pending, cancelled },
     by_hospital: byHospital
   });
 });

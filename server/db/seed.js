@@ -97,9 +97,9 @@ class InMemoryStore extends EventEmitter {
 
     // ── EmergencyRequest Table ──
     this.emergencyRequests = [
-      { request_id: 'REQ-8901', patient_id: 'PAT-001', emergency_type: 'CARDIAC',     priority: 1, status: 'ALLOCATED',     clinical_notes: 'ST-elevation, chest pain', request_time: new Date().toISOString() },
-      { request_id: 'REQ-8902', patient_id: 'PAT-002', emergency_type: 'TRAUMA',      priority: 2, status: 'IN_TREATMENT',  clinical_notes: 'Polytrauma from road accident', request_time: new Date().toISOString() },
-      { request_id: 'REQ-8903', patient_id: 'PAT-003', emergency_type: 'RESPIRATORY', priority: 3, status: 'WAITING',      clinical_notes: 'SpO2 85%, severe dyspnea', request_time: new Date().toISOString() },
+      { request_id: 'REQ-8901', patient_id: 'PAT-001', emergency_type: 'CARDIAC',     required_resource_types: ['ICU_BED', 'VENTILATOR'], required_specialist: 'CARDIOLOGIST', priority: 1, status: 'ALLOCATED',     clinical_notes: 'ST-elevation, chest pain', request_time: new Date().toISOString() },
+      { request_id: 'REQ-8902', patient_id: 'PAT-002', emergency_type: 'TRAUMA',      required_resource_types: ['ICU_BED', 'OT'], required_specialist: 'TRAUMA_SURGEON', priority: 2, status: 'IN_TREATMENT',  clinical_notes: 'Polytrauma from road accident', request_time: new Date().toISOString() },
+      { request_id: 'REQ-8903', patient_id: 'PAT-003', emergency_type: 'RESPIRATORY', required_resource_types: ['ICU_BED', 'VENTILATOR'], required_specialist: null, priority: 3, status: 'WAITING',      clinical_notes: 'SpO2 85%, severe dyspnea', request_time: new Date().toISOString() },
     ];
 
     // ── Patient Table ──
@@ -135,22 +135,19 @@ class InMemoryStore extends EventEmitter {
     }
 
     return new Promise((resolve, reject) => {
+      const startedAt = Date.now();
       const tryAcquire = () => {
         if (!this._locks.get(resourceId)) {
           this._locks.set(resourceId, true);
           resolve(() => this._locks.set(resourceId, false));
-        } else {
-          // Queue for retry
-          const timer = setTimeout(() => reject(new Error(`Lock timeout on ${resourceId}`)), timeoutMs);
-          const interval = setInterval(() => {
-            if (!this._locks.get(resourceId)) {
-              clearInterval(interval);
-              clearTimeout(timer);
-              this._locks.set(resourceId, true);
-              resolve(() => this._locks.set(resourceId, false));
-            }
-          }, 10);
+          return;
         }
+
+        if (Date.now() - startedAt >= timeoutMs) {
+          reject(new Error(`Lock timeout on ${resourceId}`));
+          return;
+        }
+        setTimeout(tryAcquire, 10);
       };
       tryAcquire();
     });

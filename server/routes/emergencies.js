@@ -5,8 +5,25 @@ import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authenticate, authorize } from '../middleware/auth.js';
 import { db } from '../db/seed.js';
+import { lockingEngine } from '../services/lockingEngine.js';
+import {
+  VALID_EMERGENCY_TYPES,
+  resolveEmergencyRequirements
+} from '../services/emergencyRequirements.js';
 
 const router = express.Router();
+
+const ALLOWED_TRANSITIONS = {
+  NEW: ['WAITING', 'CANCELLED'],
+  WAITING: ['MATCHING', 'CANCELLED'],
+  // MATCHING -> ALLOCATED is deliberately absent: allocation only happens through the
+  // hospital acceptance handshake (lockingEngine.commitAllocation), never by manual override.
+  MATCHING: ['WAITING', 'CANCELLED'],
+  ALLOCATED: ['IN_TREATMENT', 'COMPLETED', 'CANCELLED'],
+  IN_TREATMENT: ['COMPLETED'],
+  COMPLETED: [],
+  CANCELLED: []
+};
 
 // Hospital desks may only see cases referred to their own facility (patient data minimisation).
 function canViewRequest(user, requestId) {
@@ -67,27 +84,55 @@ router.post('/',
     const {
       patient_name, age, gender = 'UNKNOWN', emergency_type,
       triage_priority = 3, clinical_notes, pickup_lat, pickup_lng,
-      contact_phone
+      contact_phone, required_resources = [], required_specialist = null
     } = req.body;
 
-    if (!patient_name || !emergency_type || !triage_priority) {
+    if (typeof patient_name !== 'string' || !patient_name.trim() || !emergency_type) {
       return res.status(400).json({ error: 'Required: patient_name, emergency_type, triage_priority.' });
     }
 
-    if (triage_priority < 1 || triage_priority > 5) {
+    const parsedAge = Number(age);
+    const parsedPriority = Number(triage_priority);
+    const normalizedType = String(emergency_type).trim().toUpperCase();
+    const normalizedGender = String(gender).trim().toUpperCase();
+    const requirements = resolveEmergencyRequirements(normalizedType, required_resources, required_specialist);
+
+    if (!Number.isInteger(parsedAge) || parsedAge < 0 || parsedAge > 120) {
+      return res.status(400).json({ error: 'age must be an integer between 0 and 120.' });
+    }
+    if (!Number.isInteger(parsedPriority) || parsedPriority < 1 || parsedPriority > 5) {
       return res.status(400).json({ error: 'triage_priority must be between 1 and 5.' });
+    }
+    if (!VALID_EMERGENCY_TYPES.includes(normalizedType)) {
+      return res.status(400).json({ error: `Unsupported emergency_type. Must be: ${VALID_EMERGENCY_TYPES.join(', ')}` });
+    }
+    if (!['MALE', 'FEMALE', 'OTHER', 'UNKNOWN'].includes(normalizedGender)) {
+      return res.status(400).json({ error: 'gender must be MALE, FEMALE, OTHER, or UNKNOWN.' });
+    }
+    if (!requirements) {
+      return res.status(400).json({ error: 'Invalid required_resources or required_specialist.' });
+    }
+
+    const latitude = pickup_lat === undefined || pickup_lat === null || pickup_lat === '' ? null : Number(pickup_lat);
+    const longitude = pickup_lng === undefined || pickup_lng === null || pickup_lng === '' ? null : Number(pickup_lng);
+    if ((latitude !== null && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90))
+      || (longitude !== null && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))) {
+      return res.status(400).json({ error: 'pickup_lat/pickup_lng must be valid coordinates.' });
     }
 
     const patientId  = `PAT-${uuidv4().slice(0, 6).toUpperCase()}`;
-    const requestId  = `REQ-${Math.floor(1000 + Math.random() * 9000)}`;
+    let requestId;
+    do {
+      requestId = `REQ-${Math.floor(1000 + Math.random() * 9000)}`;
+    } while (db.emergencyRequests.some(request => request.request_id === requestId));
 
     const patient = {
       patient_id:      patientId,
       full_name:       patient_name,
-      age:             parseInt(age, 10) || 35,
-      gender:          gender.toUpperCase(),
-      emergency_type:  emergency_type.toUpperCase(),
-      triage_priority: parseInt(triage_priority, 10),
+      age:             parsedAge,
+      gender:          normalizedGender,
+      emergency_type:  normalizedType,
+      triage_priority: parsedPriority,
       contact_phone:   contact_phone || null,
       created_at:      new Date().toISOString()
     };
@@ -95,10 +140,13 @@ router.post('/',
     const request = {
       request_id:     requestId,
       patient_id:     patientId,
-      emergency_type: emergency_type.toUpperCase(),
-      priority:       parseInt(triage_priority, 10),
-      pickup_lat:     pickup_lat || null,
-      pickup_lng:     pickup_lng || null,
+      emergency_type:  normalizedType,
+      required_resource_types: requirements.resourceTypes,
+      required_resources: requirements.resourceTypes,
+      required_specialist: requirements.specialist,
+      priority:       parsedPriority,
+      pickup_lat:     latitude,
+      pickup_lng:     longitude,
       clinical_notes: clinical_notes || '',
       status:         'WAITING',
       request_time:   new Date().toISOString(),
@@ -115,7 +163,13 @@ router.post('/',
       new_state: 'WAITING',
       actor_role: req.user.role,
       actor_id: req.user.user_id,
-      metadata: { patient_name, emergency_type, triage_priority }
+      metadata: {
+        patient_name: patient_name.trim(),
+        emergency_type: normalizedType,
+        triage_priority: parsedPriority,
+        required_resource_types: requirements.resourceTypes,
+        required_specialist: requirements.specialist
+      }
     });
 
     res.status(201).json({
@@ -123,7 +177,9 @@ router.post('/',
       message: `Emergency request ${requestId} created and enqueued in OS Priority Queue.`,
       request_id: requestId,
       patient_id: patientId,
-      priority: parseInt(triage_priority, 10),
+      priority: parsedPriority,
+      required_resource_types: requirements.resourceTypes,
+      required_specialist: requirements.specialist,
       status: 'WAITING'
     });
   }
@@ -136,7 +192,7 @@ router.post('/',
 router.patch('/:requestId/status',
   authenticate,
   authorize('ADMIN'),
-  (req, res) => {
+  async (req, res) => {
     const validStatuses = ['NEW','WAITING','MATCHING','ALLOCATED','IN_TREATMENT','COMPLETED','CANCELLED'];
     const { status } = req.body;
 
@@ -148,11 +204,41 @@ router.patch('/:requestId/status',
     if (!request) return res.status(404).json({ error: 'Request not found.' });
 
     const previous = request.status;
+    if (previous === status) {
+      return res.json({ success: true, request_id: req.params.requestId, previous_status: previous, new_status: status });
+    }
+    if (!ALLOWED_TRANSITIONS[previous]?.includes(status)) {
+      return res.status(409).json({ error: `Invalid lifecycle transition: ${previous} -> ${status}.` });
+    }
     request.status = status;
     request.updated_at = new Date().toISOString();
 
     // Release resources if COMPLETED or CANCELLED
-    if (['COMPLETED', 'CANCELLED'].includes(status)) {
+    let lockCleanupError = null;
+    const isTerminal = ['COMPLETED', 'CANCELLED'].includes(status);
+    // Returning a matching case to the queue abandons its pending handshake too.
+    if (isTerminal || (previous === 'MATCHING' && status === 'WAITING')) {
+      // The new status is already recorded (synchronously), so any queued acceptance
+      // for a terminal request is refused by the locking engine.
+      // If the cleanup fails we still release committed resources below, then
+      // report the failure; a leftover lock cannot be committed and expires at its TTL.
+      try {
+        await lockingEngine.cancelPendingForRequest(req.params.requestId, `Request ${status}`);
+      } catch (err) {
+        lockCleanupError = err;
+        console.error('[LIFECYCLE]', err.message);
+        db.auditLog({
+          request_id: req.params.requestId,
+          event_type: 'LOCK_CLEANUP_FAILED',
+          previous_state: previous,
+          new_state: status,
+          actor_role: 'SYSTEM',
+          metadata: { error: err.message }
+        });
+      }
+    }
+
+    if (isTerminal) {
       const allocs = db.resourceAllocations.filter(
         a => a.request_id === req.params.requestId && a.status === 'COMMITTED'
       );
@@ -165,6 +251,13 @@ router.patch('/:requestId/status',
           resource.version_lock += 1;
         }
       });
+      db.ambulances
+        .filter(ambulance => ambulance.assigned_request_id === req.params.requestId)
+        .forEach(ambulance => {
+          ambulance.status = 'AVAILABLE';
+          delete ambulance.assigned_request_id;
+          ambulance.updated_at = new Date().toISOString();
+        });
     }
 
     db.auditLog({
@@ -175,6 +268,16 @@ router.patch('/:requestId/status',
       actor_role: 'ADMIN',
       actor_id: req.user.user_id
     });
+
+    if (lockCleanupError) {
+      return res.status(500).json({
+        error: 'Status updated, but releasing the pending referral lock failed. The lock cannot be committed and will be released when its 90-second TTL expires.',
+        request_id: req.params.requestId,
+        previous_status: previous,
+        new_status: status,
+        lock_cleanup: 'FAILED'
+      });
+    }
 
     res.json({ success: true, request_id: req.params.requestId, previous_status: previous, new_status: status });
   }

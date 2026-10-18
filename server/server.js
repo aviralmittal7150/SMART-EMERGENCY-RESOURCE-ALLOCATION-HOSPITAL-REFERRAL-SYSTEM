@@ -273,20 +273,16 @@ setInterval(() => {
     return Date.now() > expiresAt + 5000; // 5s grace period
   });
 
-  staleAcceptances.forEach(acc => {
-    console.log(`[WORKER] Cleaning up stale soft-lock: ${acc.acceptance_id}`);
-    acc.status = 'EXPIRED';
-    db.auditLog({
-      request_id: acc.request_id,
-      hospital_id: acc.hospital_id,
-      event_type: 'LOCK_EXPIRED_WORKER_CLEANUP',
-      previous_state: 'PENDING',
-      new_state: 'EXPIRED',
-      actor_role: 'SYSTEM',
-      metadata: { acceptance_id: acc.acceptance_id }
-    });
-    io.to('command_center').emit('lock:expired_cleanup', acc);
-  });
+   staleAcceptances.forEach(async acc => {
+     console.log(`[WORKER] Cleaning up stale soft-lock: ${acc.acceptance_id}`);
+     // An unhandled rejection here would terminate the whole API process.
+     try {
+       await lockingEngine.expireLock(acc.acceptance_id);
+       io.to('command_center').emit('lock:expired_cleanup', acc);
+     } catch (err) {
+       console.error(`[WORKER] Failed to expire ${acc.acceptance_id}:`, err.message);
+     }
+   });
 }, 30_000);
 
 // ──────────────────────────────────────────────────────────────────────────────

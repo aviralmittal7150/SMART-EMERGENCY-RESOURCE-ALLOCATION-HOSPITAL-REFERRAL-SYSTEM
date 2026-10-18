@@ -40,7 +40,7 @@ async function login(username, password) {
   return body.token;
 }
 
-test('server source is not public, frontend assets are, and unreferred cases are hidden from desks', async t => {
+test('server source is not public, frontend assets are, and desks only see their own cases', async t => {
   const server = spawn(process.execPath, ['server/server.js'], {
     cwd: process.cwd(),
     env: { ...process.env, PORT: String(PORT), DB_USE_MEMORY: 'true' },
@@ -82,4 +82,17 @@ test('server source is not public, frontend assets are, and unreferred cases are
     assert.ok(!(await api('/api/v1/emergencies', { token })).body.queue.some(r => r.request_id === requestId));
     assert.equal((await api(`/api/v1/emergencies/${requestId}`, { token })).response.status, 404);
   }
+
+  const initiated = await api('/api/v1/referrals/initiate', {
+    method: 'POST',
+    token: paramedic,
+    body: JSON.stringify({ request_id: requestId, hospital_id: 'H-101' })
+  });
+  assert.equal(initiated.response.status, 201);
+
+  // Only the referred hospital's desk gains visibility, including the audit trail.
+  assert.equal((await api(`/api/v1/emergencies/${requestId}`, { token: desk101 })).response.status, 200);
+  assert.equal((await api(`/api/v1/emergencies/${requestId}/audit`, { token: desk101 })).response.status, 200);
+  assert.equal((await api(`/api/v1/emergencies/${requestId}`, { token: desk102 })).response.status, 404);
+  assert.equal((await api(`/api/v1/emergencies/${requestId}/audit`, { token: desk102 })).response.status, 404);
 });

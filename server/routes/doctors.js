@@ -101,7 +101,7 @@ router.post('/',
     db.doctors.push(newDoctor);
 
     db.auditLog({
-      request_id: 'N/A',
+       request_id: null,
       hospital_id,
       event_type: 'DOCTOR_ADDED',
       previous_state: null,
@@ -140,7 +140,7 @@ router.patch('/:doctorId/status',
     doctor.availability_status = availability_status;
 
     db.auditLog({
-      request_id: 'N/A',
+       request_id: null,
       hospital_id: doctor.hospital_id,
       event_type: 'DOCTOR_STATUS_CHANGED',
       previous_state: previous,
@@ -192,7 +192,7 @@ router.delete('/:doctorId',
     const [removed] = db.doctors.splice(idx, 1);
 
     db.auditLog({
-      request_id: 'N/A',
+       request_id: null,
       hospital_id: removed.hospital_id,
       event_type: 'DOCTOR_REMOVED',
       previous_state: removed.availability_status,

@@ -19,7 +19,8 @@ router.get('/', authenticate, (req, res) => {
   const result = hospitals.map(h => ({
     ...h,
     resources: buildResourceSummary(h.hospital_id),
-    doctors:   buildDoctorSummary(h.hospital_id)
+      doctors:   buildDoctorSummary(h.hospital_id),
+      specialists: buildSpecialistSummary(h.hospital_id)
   }));
 
   res.json({ success: true, count: result.length, hospitals: result });
@@ -43,7 +44,8 @@ router.get('/:hospitalId', authenticate, (req, res) => {
     hospital: {
       ...hospital,
       resources: buildResourceSummary(hospital.hospital_id),
-      doctors:   buildDoctorSummary(hospital.hospital_id),
+       doctors:   buildDoctorSummary(hospital.hospital_id),
+       specialists: buildSpecialistSummary(hospital.hospital_id),
       activeAllocations: db.resourceAllocations.filter(
         a => a.hospital_id === hospital.hospital_id && a.status !== 'RELEASED'
       ).length
@@ -71,7 +73,7 @@ router.patch('/:hospitalId/status',
     hospital.emergency_status = emergency_status;
 
     db.auditLog({
-      request_id: 'N/A',
+      request_id: null,
       hospital_id: hospital.hospital_id,
       event_type: 'HOSPITAL_STATUS_CHANGED',
       previous_state: previous,
@@ -90,7 +92,8 @@ router.patch('/:hospitalId/status',
 // ────────────────────────────────────────────────────────────
 router.patch('/:hospitalId/resources/:resourceType',
   authenticate,
-  (req, res) => {
+  authorize('ADMIN', 'HOSPITAL_DESK'),
+  async (req, res) => {
     const { hospitalId, resourceType } = req.params;
     const { available_capacity, total_capacity } = req.body;
 
@@ -103,9 +106,40 @@ router.patch('/:hospitalId/resources/:resourceType',
     );
     if (!resource) return res.status(404).json({ error: 'Resource not found.' });
 
-    if (total_capacity !== undefined)     resource.total_capacity     = parseInt(total_capacity, 10);
-    if (available_capacity !== undefined) resource.available_capacity = parseInt(available_capacity, 10);
-    resource.version_lock += 1;
+    const nextTotal = total_capacity === undefined ? resource.total_capacity : Number(total_capacity);
+    const nextAvailable = available_capacity === undefined ? resource.available_capacity : Number(available_capacity);
+    if (!Number.isInteger(nextTotal) || !Number.isInteger(nextAvailable)
+      || nextTotal < 0 || nextAvailable < 0
+      || nextAvailable > nextTotal
+      || nextAvailable < resource.locked_capacity) {
+      return res.status(400).json({
+        error: 'Capacity must be whole numbers with 0 <= locked <= available <= total.'
+      });
+    }
+
+    let release;
+    const previousCapacity = `${resource.total_capacity}:${resource.available_capacity}`;
+    try {
+      release = await db.acquireResourceLock(resource.resource_id, 3000);
+      resource.total_capacity = nextTotal;
+      resource.available_capacity = nextAvailable;
+      resource.version_lock += 1;
+    } catch (error) {
+      return res.status(409).json({ error: error.message });
+    } finally {
+      release?.();
+    }
+
+    db.auditLog({
+      request_id: null,
+      hospital_id: hospitalId,
+      event_type: 'RESOURCE_CAPACITY_UPDATED',
+      previous_state: previousCapacity,
+      new_state: `${nextTotal}:${nextAvailable}`,
+      actor_role: req.user.role,
+      actor_id: req.user.user_id,
+      metadata: { resource_type: resource.resource_type }
+    });
 
     res.json({ success: true, resource });
   }
@@ -138,6 +172,26 @@ function buildDoctorSummary(hospitalId) {
     availability_status: d.availability_status,
     shift:               `${d.shift_start} - ${d.shift_end}`
   }));
+}
+
+function buildSpecialistSummary(hospitalId) {
+  const summary = {
+    cardiologist: false,
+    neurologist: false,
+    traumaSurgeon: false,
+    pediatrician: false
+  };
+  const keyBySpecialization = {
+    CARDIOLOGIST: 'cardiologist',
+    NEUROLOGIST: 'neurologist',
+    TRAUMA_SURGEON: 'traumaSurgeon',
+    PEDIATRICIAN: 'pediatrician'
+  };
+  db.getDoctors(hospitalId).forEach(doctor => {
+    const key = keyBySpecialization[doctor.specialization];
+    if (key && doctor.availability_status === 'AVAILABLE') summary[key] = true;
+  });
+  return summary;
 }
 
 export default router;
