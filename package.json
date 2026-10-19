@@ -19,7 +19,10 @@
     "dev": "serve -l 3000 .",
     "server": "node server/server.js",
     "server:dev": "node --watch server/server.js",
-    "start:all": "npm run dev & npm run server"
+    "start:all": "npm run dev & npm run server",
+    "db:init": "node server/db/init.js",
+    "db:seed": "node server/db/init.js --seed",
+    "test:mysql": "node --test --test-force-exit tests/mysql_locking.test.js tests/mysql_routes.test.js tests/api_integration_mysql.test.js"
   },
   "keywords": [
     "emergency",

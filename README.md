@@ -234,6 +234,37 @@ npm run dev
 # Server listening at http://localhost:3000
 ```
 
+### 8.5 Storage modes: in-memory demo vs MySQL
+
+The API runs on exactly one storage backend, chosen **explicitly** by `DB_USE_MEMORY` (see `.env.example`):
+
+| | `DB_USE_MEMORY=true` (demo) | `DB_USE_MEMORY=false` (MySQL) |
+| :--- | :--- | :--- |
+| Persistence | **None.** All data is lost on restart. | Persistent; survives restarts. |
+| Processes | One only (state lives in process memory). | Many may share one database. |
+| Locking | In-process mutexes and timers. | InnoDB transactions, `SELECT ... FOR UPDATE`, sorted lock order, persisted 90 s expiry. |
+| Atomicity | Each operation is atomic within the single process. | Each operation is one database transaction (state change, resource accounting and audit row together). |
+| Use for | Demos, UI work, unit tests. | Anything that must not lose or double-allocate resources. |
+
+Rules the server enforces:
+- With `NODE_ENV=production`, `DB_USE_MEMORY` **must** be set. There is no implicit default.
+- In MySQL mode, if the database is unreachable, the credentials are rejected, or the schema is out of date, the server **refuses to start**. It never falls back to the in-memory store.
+- MySQL mode has no default host, user or database: set `DB_HOST`, `DB_NAME`, `DB_USER` (and `DB_PASS`, required in production). Use a dedicated least-privilege user, not `root`.
+
+Setting up a MySQL database (non-destructive: tables are created only if missing, nothing is dropped):
+
+```bash
+# 1. Create an empty database and a user for it (once, with your own admin credentials)
+# 2. Put DB_USE_MEMORY=false and the DB_* values in .env
+npm run db:init      # create the schema
+npm run db:seed      # optional: demo hospitals, doctors, ambulances and cases (only if the database has no hospitals)
+npm start            # the startup log states the active storage mode
+```
+
+If you point the app at a database created from an older `schema.sql`, startup fails with a list of what is missing; see `server/db/migrations/001_referral_lifecycle.sql` (additive, run manually).
+
+Known limits: login accounts are still the built-in demo users (the `SystemUser` table is not used yet), and the MySQL integration tests run only against a dedicated database whose name ends in `_test` (`npm run test:mysql`; they are skipped when it is not configured).
+
 ---
 
 ## 🧪 9. Concurrency & Stress Verification Matrix
