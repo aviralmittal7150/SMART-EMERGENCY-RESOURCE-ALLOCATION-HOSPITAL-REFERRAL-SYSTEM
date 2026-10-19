@@ -3,61 +3,47 @@
 // /api/v1/doctors
 
 import express from 'express';
-import { v4 as uuidv4 } from 'uuid';
 import { authenticate, authorize } from '../middleware/auth.js';
-import { db } from '../db/seed.js';
+import { store } from '../db/store.js';
 
 const router = express.Router();
 
 const VALID_SPECIALIZATIONS = ['CARDIOLOGIST', 'NEUROLOGIST', 'TRAUMA_SURGEON', 'PEDIATRICIAN', 'GENERAL_ER'];
 const VALID_STATUSES = ['AVAILABLE', 'IN_PROCEDURE', 'OFF_DUTY'];
 
+const actorOf = req => ({ role: req.user.role, id: req.user.user_id });
+
+// "H:MM" or "HH:MM[:SS]" (24-hour). Anything else would be a storage error in MySQL (TIME column).
+const SHIFT_TIME = /^([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+const invalidShift = (...values) => values.some(v => v !== undefined && v !== null && v !== '' && !SHIFT_TIME.test(String(v)));
+
 // ────────────────────────────────────────────────────────────
 // GET /api/v1/doctors
 // All doctors (Admin), or own hospital's doctors (Hospital Desk)
 // ────────────────────────────────────────────────────────────
-router.get('/', authenticate, (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   const { hospital_id, specialization, availability_status } = req.query;
-  let doctors = [...db.doctors];
 
   // RBAC: Hospital Desk only sees their own facility's doctors
-  if (req.user.role === 'HOSPITAL_DESK') {
-    doctors = doctors.filter(d => d.hospital_id === req.user.hospital_id);
-  } else if (hospital_id) {
-    doctors = doctors.filter(d => d.hospital_id === hospital_id);
-  }
+  const hospitalId = req.user.role === 'HOSPITAL_DESK' ? req.user.hospital_id : hospital_id;
 
-  if (specialization) doctors = doctors.filter(d => d.specialization === specialization.toUpperCase());
-  if (availability_status) doctors = doctors.filter(d => d.availability_status === availability_status.toUpperCase());
-
-  // Enrich with hospital name
-  const enriched = doctors.map(d => ({
-    ...d,
-    hospital_name: db.hospitals.find(h => h.hospital_id === d.hospital_id)?.hospital_name || 'Unknown'
-  }));
-
-  res.json({ success: true, count: enriched.length, doctors: enriched });
+  const doctors = await store.listDoctors({ hospitalId, specialization, availabilityStatus: availability_status });
+  res.json({ success: true, count: doctors.length, doctors });
 });
 
 // ────────────────────────────────────────────────────────────
 // GET /api/v1/doctors/:doctorId
 // Single doctor detail
 // ────────────────────────────────────────────────────────────
-router.get('/:doctorId', authenticate, (req, res) => {
-  const doctor = db.doctors.find(d => d.doctor_id === req.params.doctorId);
+router.get('/:doctorId', authenticate, async (req, res) => {
+  const doctor = await store.getDoctor(req.params.doctorId);
   if (!doctor) return res.status(404).json({ error: 'Doctor not found.' });
 
   if (req.user.role === 'HOSPITAL_DESK' && req.user.hospital_id !== doctor.hospital_id) {
     return res.status(403).json({ error: 'Access restricted to your facility.' });
   }
 
-  res.json({
-    success: true,
-    doctor: {
-      ...doctor,
-      hospital_name: db.hospitals.find(h => h.hospital_id === doctor.hospital_id)?.hospital_name
-    }
-  });
+  res.json({ success: true, doctor });
 });
 
 // ────────────────────────────────────────────────────────────
@@ -67,11 +53,18 @@ router.get('/:doctorId', authenticate, (req, res) => {
 router.post('/',
   authenticate,
   authorize('ADMIN', 'HOSPITAL_DESK'),
-  (req, res) => {
+  async (req, res) => {
     const { hospital_id, full_name, specialization, shift_start, shift_end } = req.body;
 
     if (!full_name || !specialization || !hospital_id) {
       return res.status(400).json({ error: 'full_name, specialization, hospital_id are required.' });
+    }
+
+    if (String(full_name).length > 150) {
+      return res.status(400).json({ error: 'full_name must be at most 150 characters.' });
+    }
+    if (invalidShift(shift_start, shift_end)) {
+      return res.status(400).json({ error: 'shift_start and shift_end must be times like 08:00.' });
     }
 
     if (!VALID_SPECIALIZATIONS.includes(specialization.toUpperCase())) {
@@ -83,35 +76,11 @@ router.post('/',
       return res.status(403).json({ error: 'Can only add doctors to your own facility.' });
     }
 
-    const hospital = db.hospitals.find(h => h.hospital_id === hospital_id);
+    const hospital = await store.getHospital(hospital_id);
     if (!hospital) return res.status(404).json({ error: 'Hospital not found.' });
 
-    const doctorId = `DR-${String(db.doctors.length + 1).padStart(3, '0')}`;
-    const newDoctor = {
-      doctor_id:           doctorId,
-      hospital_id,
-      full_name,
-      specialization:      specialization.toUpperCase(),
-      availability_status: 'AVAILABLE',
-      shift_start:         shift_start || '08:00',
-      shift_end:           shift_end   || '20:00',
-      created_at:          new Date().toISOString()
-    };
-
-    db.doctors.push(newDoctor);
-
-    db.auditLog({
-       request_id: null,
-      hospital_id,
-      event_type: 'DOCTOR_ADDED',
-      previous_state: null,
-      new_state: 'AVAILABLE',
-      actor_role: req.user.role,
-      actor_id: req.user.user_id,
-      metadata: { doctorId, full_name, specialization }
-    });
-
-    res.status(201).json({ success: true, doctor: newDoctor });
+    const doctor = await store.addDoctor({ hospital_id, full_name, specialization, shift_start, shift_end }, actorOf(req));
+    res.status(201).json({ success: true, doctor });
   }
 );
 
@@ -122,35 +91,23 @@ router.post('/',
 router.patch('/:doctorId/status',
   authenticate,
   authorize('ADMIN', 'HOSPITAL_DESK'),
-  (req, res) => {
+  async (req, res) => {
     const { availability_status } = req.body;
 
     if (!VALID_STATUSES.includes(availability_status)) {
       return res.status(400).json({ error: `Invalid status. Must be: ${VALID_STATUSES.join(', ')}` });
     }
 
-    const doctor = db.doctors.find(d => d.doctor_id === req.params.doctorId);
+    const doctor = await store.getDoctor(req.params.doctorId);
     if (!doctor) return res.status(404).json({ error: 'Doctor not found.' });
 
     if (req.user.role === 'HOSPITAL_DESK' && req.user.hospital_id !== doctor.hospital_id) {
       return res.status(403).json({ error: 'Can only update doctors at your own facility.' });
     }
 
-    const previous = doctor.availability_status;
-    doctor.availability_status = availability_status;
-
-    db.auditLog({
-       request_id: null,
-      hospital_id: doctor.hospital_id,
-      event_type: 'DOCTOR_STATUS_CHANGED',
-      previous_state: previous,
-      new_state: availability_status,
-      actor_role: req.user.role,
-      actor_id: req.user.user_id,
-      metadata: { doctorId: doctor.doctor_id, full_name: doctor.full_name }
-    });
-
-    res.json({ success: true, doctor_id: doctor.doctor_id, previous_status: previous, new_status: availability_status });
+    const updated = await store.updateDoctorStatus(doctor.doctor_id, availability_status, actorOf(req));
+    if (!updated) return res.status(404).json({ error: 'Doctor not found.' });
+    res.json({ success: true, ...updated });
   }
 );
 
@@ -161,20 +118,23 @@ router.patch('/:doctorId/status',
 router.patch('/:doctorId/shift',
   authenticate,
   authorize('ADMIN', 'HOSPITAL_DESK'),
-  (req, res) => {
+  async (req, res) => {
     const { shift_start, shift_end } = req.body;
 
-    const doctor = db.doctors.find(d => d.doctor_id === req.params.doctorId);
+    if (invalidShift(shift_start, shift_end)) {
+      return res.status(400).json({ error: 'shift_start and shift_end must be times like 08:00.' });
+    }
+
+    const doctor = await store.getDoctor(req.params.doctorId);
     if (!doctor) return res.status(404).json({ error: 'Doctor not found.' });
 
     if (req.user.role === 'HOSPITAL_DESK' && req.user.hospital_id !== doctor.hospital_id) {
       return res.status(403).json({ error: 'Can only update doctors at your own facility.' });
     }
 
-    if (shift_start) doctor.shift_start = shift_start;
-    if (shift_end)   doctor.shift_end   = shift_end;
-
-    res.json({ success: true, doctor_id: doctor.doctor_id, shift_start: doctor.shift_start, shift_end: doctor.shift_end });
+    const updated = await store.updateDoctorShift(doctor.doctor_id, { shift_start, shift_end });
+    if (!updated) return res.status(404).json({ error: 'Doctor not found.' });
+    res.json({ success: true, ...updated });
   }
 );
 
@@ -185,22 +145,9 @@ router.patch('/:doctorId/shift',
 router.delete('/:doctorId',
   authenticate,
   authorize('ADMIN'),
-  (req, res) => {
-    const idx = db.doctors.findIndex(d => d.doctor_id === req.params.doctorId);
-    if (idx === -1) return res.status(404).json({ error: 'Doctor not found.' });
-
-    const [removed] = db.doctors.splice(idx, 1);
-
-    db.auditLog({
-       request_id: null,
-      hospital_id: removed.hospital_id,
-      event_type: 'DOCTOR_REMOVED',
-      previous_state: removed.availability_status,
-      new_state: null,
-      actor_role: 'ADMIN',
-      actor_id: req.user.user_id,
-      metadata: { doctorId: removed.doctor_id, full_name: removed.full_name }
-    });
+  async (req, res) => {
+    const removed = await store.removeDoctor(req.params.doctorId, actorOf(req));
+    if (!removed) return res.status(404).json({ error: 'Doctor not found.' });
 
     res.json({ success: true, message: `Doctor ${removed.full_name} removed from system.` });
   }
