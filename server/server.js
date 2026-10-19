@@ -161,16 +161,13 @@ const io = new SocketIOServer(httpServer, {
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.split(' ')[1];
   if (!token) {
-    // Allow unauthenticated connections for frontend demo (read-only events)
-    socket.user = { role: 'GUEST', user_id: `GUEST-${socket.id.slice(0, 6)}` };
-    return next();
+    return next(new Error('Authentication required for operational events.'));
   }
   try {
     socket.user = jwt.verify(token, getJwtSecret());
     next();
   } catch {
-    socket.user = { role: 'GUEST', user_id: `GUEST-${socket.id.slice(0, 6)}` };
-    next();
+    next(new Error('Invalid or expired socket token.'));
   }
 });
 
