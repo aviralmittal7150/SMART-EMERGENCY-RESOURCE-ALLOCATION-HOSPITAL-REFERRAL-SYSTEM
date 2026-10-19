@@ -6,14 +6,41 @@ on:
   pull_request:
     branches: [ main ]
 
+# Least privilege: nothing in this workflow needs more than read access to the repository.
+permissions:
+  contents: read
+
 jobs:
   test-and-verify:
     name: Node Test & Concurrency Verification
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     strategy:
       matrix:
         node-version: [20.x, 22.x]
+
+    # A disposable MySQL for every matrix leg (service containers are per job, so the Node 20 and
+    # Node 22 legs cannot interfere). Nothing here is a real credential: root has an empty password
+    # inside a container that only this runner can reach, and the test user created below gets a random
+    # password generated at run time (masked in the logs, never stored in the repository).
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      # The MySQL suites must really run in CI. With this set, a missing or unreachable test database
+      # FAILS the build instead of letting those suites skip.
+      REQUIRE_MYSQL_TESTS: 'true'
 
     steps:
       - name: Checkout Repository
@@ -28,8 +55,32 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Run Full Unit & Concurrency Test Automation Suite
-        run: npm test
+      - name: Ensure the MySQL client is available
+        run: command -v mysql >/dev/null || (sudo apt-get update && sudo apt-get install -y mysql-client)
+
+      - name: Prepare the disposable MySQL test database
+        env:
+          MYSQL_ADMIN_HOST: 127.0.0.1
+          MYSQL_ADMIN_PORT: '3306'
+          MYSQL_TEST_DB: emergency_system_test
+          MYSQL_TEST_USER: eris_test
+        # Waits for readiness, creates the database + a restricted user with a random password, and
+        # appends MYSQL_TEST_HOST/PORT/USER/PASS/DB to $GITHUB_ENV for the later steps.
+        run: ENV_OUT="$GITHUB_ENV" bash scripts/prepare-mysql-test-db.sh
+
+      - name: Initialise the schema and demo data with the project's own tooling
+        run: |
+          export DB_USE_MEMORY=false DB_HOST="$MYSQL_TEST_HOST" DB_PORT="$MYSQL_TEST_PORT" \
+                 DB_NAME="$MYSQL_TEST_DB" DB_USER="$MYSQL_TEST_USER" DB_PASS="$MYSQL_TEST_PASS"
+          npm run db:init
+          npm run db:seed
+
+      - name: Run Full Unit & Concurrency Test Automation Suite (MySQL required)
+        run: |
+          npm test | tee test-output.log
+          # The MySQL suites must have really run: no skipped tests, no failures.
+          grep -qx '# skipped 0' test-output.log
+          grep -qx '# fail 0' test-output.log
 
       - name: Concurrency Stress Test Suite (Issue #24 / P3-01)
         run: npm run test:concurrency
