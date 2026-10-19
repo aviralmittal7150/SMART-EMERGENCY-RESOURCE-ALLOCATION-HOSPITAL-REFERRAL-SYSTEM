@@ -5,7 +5,9 @@
 //  - the database name MUST end in "_test" (these tests drop and recreate its tables)
 //  - a MySQL advisory lock serialises every test FILE that uses the database, because `node --test`
 //    runs files in parallel processes and they would otherwise reset each other's data
-// If credentials are missing or MySQL is unreachable the caller gets { skip } and should skip, not fail.
+// If credentials are missing or MySQL is unreachable the caller gets { skip } and should skip, not fail,
+// UNLESS REQUIRE_MYSQL_TESTS=true (set by CI): then that situation throws, so a broken or absent MySQL
+// service fails the build instead of letting the MySQL suites silently skip.
 
 import dotenv from 'dotenv';
 import mysql from 'mysql2/promise';
@@ -23,11 +25,20 @@ export const testConfig = {
 
 const LOCK_NAME = 'eris_test_database';
 
+const REQUIRED = process.env.REQUIRE_MYSQL_TESTS === 'true';
+
+function unavailable(reason) {
+  if (REQUIRED) {
+    throw new Error(`REQUIRE_MYSQL_TESTS=true but the MySQL test database is not usable: ${reason}`);
+  }
+  return { skip: reason };
+}
+
 /**
  * @returns {Promise<{skip:string}|{admin:any, config:object, reset:Function, release:Function}>}
  */
 export async function openTestDatabase() {
-  if (!testConfig.user || !testConfig.database) return { skip: 'MYSQL_TEST_* not set in .env.local' };
+  if (!testConfig.user || !testConfig.database) return unavailable('MYSQL_TEST_* is not set (.env.local locally, workflow env in CI)');
   if (!/_test$/.test(testConfig.database)) {
     throw new Error(`Refusing to run: MYSQL_TEST_DB must end in "_test" (got "${testConfig.database}").`);
   }
@@ -35,7 +46,7 @@ export async function openTestDatabase() {
   try {
     admin = await mysql.createConnection({ ...testConfig, multipleStatements: true, connectTimeout: 3000 });
   } catch (err) {
-    return { skip: `MySQL unreachable (${err.code || err.message})` };
+    return unavailable(`MySQL unreachable (${err.code || err.message})`);
   }
   const [[{ got }]] = await admin.query('SELECT GET_LOCK(?, 600) AS got', [LOCK_NAME]);
   if (Number(got) !== 1) {
