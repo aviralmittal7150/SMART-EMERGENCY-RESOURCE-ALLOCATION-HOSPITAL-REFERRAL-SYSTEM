@@ -158,10 +158,14 @@ CREATE TABLE IF NOT EXISTS Ambulance (
   current_lat        DECIMAL(10, 7),
   current_lng        DECIMAL(10, 7),
   eta_mins           SMALLINT,
+  assigned_request_id     VARCHAR(20) NULL COMMENT 'Case this unit is dispatched to (set on referral acceptance)',
+  destination_hospital_id VARCHAR(20) NULL,
   updated_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (hospital_id) REFERENCES Hospital(hospital_id) ON DELETE CASCADE,
+  FOREIGN KEY (assigned_request_id) REFERENCES EmergencyRequest(request_id) ON DELETE SET NULL,
   INDEX idx_status (status),
-  INDEX idx_hospital (hospital_id)
+  INDEX idx_hospital (hospital_id),
+  INDEX idx_assigned_request (assigned_request_id)
 );
 
 -- ─────────────────────────────────────────────────────────────
