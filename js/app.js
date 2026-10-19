@@ -24,6 +24,7 @@ import {
   getAuthToken,
   getCurrentUser
 } from './api.js';
+import { dispatchForReferral, getDispatchControl } from './dispatch_state.js';
 import {
   getLedgerEntries,
   verifyLedgerIntegrity,
@@ -65,6 +66,8 @@ const state = {
     specialist: "cardiologist"
   },
   currentActiveReferral: null,
+  lastAcceptedReferral: null,
+  selectedRequestId: null,
   activeTab: "tab-command",
   currentUserRole: "admin",
   currentUser: null,
@@ -323,6 +326,7 @@ async function refreshWorkspaceData() {
     state.dataSource = "backend";
     updateDataSourceBanner();
     renderKpiCards(); renderHospitalsDirectory(); renderEmergencyQueue(); renderAmbulanceFleet(); renderDoctorsRoster();
+    updateRoadsideDispatchControl();
     recordActivity("DATA_REFRESHED", "Authorized workspace data refreshed", "success");
     showNotification("✓ Workspace data refreshed from the connected API.", "success");
     return true;
@@ -352,7 +356,7 @@ function normalizeHospital(hospital) {
       icuBeds: resourceFor(["icuBeds", "icubed", "icu_bed"]),
       ventilators: resourceFor(["ventilators", "ventilator"]),
       emergencyOT: resourceFor(["emergencyOT", "ot"]),
-      specialists: hospital.specialists || { cardiologist: false, neurologist: false, traumaSurgeon: false, pediatrician: false }
+     specialists: hospital.specialists || buildSpecialistFlags(hospital.doctors)
     }
   };
 }
@@ -363,7 +367,7 @@ function normalizeEmergency(item) {
   return {
     ...item,
     requestId: item.requestId || item.request_id,
-    patientName: item.patientName || patient.patient_name || patient.name || "Operational case",
+     patientName: item.patientName || patient.patient_name || patient.full_name || patient.name || "Operational case",
     age: item.age || patient.age || "—",
     emergencyType: item.emergencyType || item.emergency_type || "GENERAL",
     priority: Number(item.priority || item.triage_priority || 5),
@@ -371,8 +375,25 @@ function normalizeEmergency(item) {
     status: item.status || "WAITING",
     assignedHospital: item.assignedHospital || item.assigned_hospital || "Matching...",
     requestTime: item.requestTime || item.request_time || new Date().toLocaleTimeString(),
-    requiredResources: item.requiredResources || item.required_resources || []
+     requiredResources: item.requiredResources || item.required_resources || [],
+     requiredResourceTypes: item.requiredResourceTypes || item.required_resource_types || [],
+     requiredSpecialist: item.requiredSpecialist || item.required_specialist || null
   };
+}
+
+function buildSpecialistFlags(doctors = []) {
+  const flags = { cardiologist: false, neurologist: false, traumaSurgeon: false, pediatrician: false };
+  const keyBySpecialization = {
+    CARDIOLOGIST: "cardiologist",
+    NEUROLOGIST: "neurologist",
+    TRAUMA_SURGEON: "traumaSurgeon",
+    PEDIATRICIAN: "pediatrician"
+  };
+  doctors.forEach(doctor => {
+    const key = keyBySpecialization[doctor.specialization];
+    if (key && doctor.availability_status === "AVAILABLE") flags[key] = true;
+  });
+  return flags;
 }
 
 function normalizeAmbulance(item) {
@@ -521,7 +542,7 @@ function attachFormListeners() {
       status: "WAITING",
       assignedHospital: "Calculating Best Match...",
       requestTime: new Date().toLocaleTimeString(),
-      requiredResources: Object.keys(state.customRequirements).filter(k => state.customRequirements[k]),
+           requiredResources: Object.keys(state.customRequirements).filter(k => state.customRequirements[k]),
       notes
     };
 
@@ -530,12 +551,15 @@ function attachFormListeners() {
         const response = await EmergenciesAPI.create({
           patient_name: patientName,
           age: patientAge,
-          emergency_type: state.selectedEmergencyType,
-          triage_priority: state.selectedTriage,
-          clinical_notes: notes
+           emergency_type: state.selectedEmergencyType,
+           triage_priority: state.selectedTriage,
+           clinical_notes: notes,
+           required_resources: resourceTypesForApi(state.customRequirements),
+           required_specialist: state.customRequirements.specialist
         });
         if (response?.request_id) {
           newRequest.requestId = response.request_id;
+          state.selectedRequestId = response.request_id;
           state.dataSource = "backend";
           await refreshWorkspaceData();
           triggerTabSwitch("tab-ranking");
@@ -551,6 +575,7 @@ function attachFormListeners() {
 
     // Insert into Priority Queue (sorted by comparePriority)
     state.emergencyQueue.push(newRequest);
+    state.selectedRequestId = newRequest.requestId;
     state.emergencyQueue.sort(comparePriority);
 
     // Switch to Ranking Tab automatically
@@ -561,6 +586,14 @@ function attachFormListeners() {
     recordActivity("REQUEST_CREATED", `Emergency ${newRequest.requestId} entered the standalone priority queue`, "critical");
     showNotification(`🚨 Emergency Registered: ${newRequest.requestId} (${newRequest.priorityName}) - Matching suitable hospitals...`, "urgent");
   });
+}
+
+function resourceTypesForApi(requirements) {
+  const resourceTypes = [];
+  if (requirements.requiredBeds) resourceTypes.push("ICU_BED");
+  if (requirements.requiredVents) resourceTypes.push("VENTILATOR");
+  if (requirements.requiredOT) resourceTypes.push("OT");
+  return resourceTypes;
 }
 
 function triggerTabSwitch(tabId) {
@@ -668,17 +701,18 @@ function renderRankingResults() {
 }
 
 async function initiateReferralLock(hospital, requestedRequest = null) {
-  const latestWaiting = requestedRequest || state.emergencyQueue.find(e => e.status === "WAITING") || state.emergencyQueue[0];
+  const selectedRequest = state.emergencyQueue.find(item => item.requestId === state.selectedRequestId);
+  const waitingRequests = state.emergencyQueue.filter(e => ["NEW", "WAITING"].includes(e.status));
+  const latestWaiting = requestedRequest || selectedRequest || (waitingRequests.length === 1 ? waitingRequests[0] : null);
   if (!latestWaiting) {
-    showNotification("Create or select an emergency before initiating a referral.", "urgent");
+    showNotification("Select exactly one NEW/WAITING emergency in the priority queue before initiating a referral.", "urgent");
     return;
   }
 
   if (getAuthToken()) {
-    const resourceTypes = [];
-    if (state.customRequirements.requiredBeds) resourceTypes.push("ICU_BED");
-    if (state.customRequirements.requiredVents) resourceTypes.push("VENTILATOR");
-    if (state.customRequirements.requiredOT) resourceTypes.push("OT");
+    const resourceTypes = latestWaiting.requiredResourceTypes?.length
+      ? latestWaiting.requiredResourceTypes
+      : resourceTypesForApi(state.customRequirements);
     try {
       const response = await ReferralsAPI.initiate(latestWaiting.requestId, hospital.id, resourceTypes.length ? resourceTypes : ["ICU_BED"]);
       if (response?.acceptance_id) {
@@ -765,7 +799,7 @@ function renderHospitalAcceptanceView() {
         <div>
           <div>🏥 <strong>Target Facility:</strong> ${hospital.name}</div>
           <div>📍 <strong>Distance:</strong> ${hospital.distanceKm} km (Est. Transit: ~${Math.round(hospital.distanceKm * 2.5)} mins)</div>
-          <div>🔒 <strong>Resources Locked:</strong> 1 ICU Bed (Soft Reservation)</div>
+          <div>🔒 <strong>Resources Locked:</strong> ${(request.requiredResourceTypes?.length ? request.requiredResourceTypes : ["ICU_BED"]).join(", ")} (Soft Reservation)</div>
         </div>
       </div>
 
@@ -783,13 +817,18 @@ function renderHospitalAcceptanceView() {
   document.getElementById("btnAcceptReferral")?.addEventListener("click", async () => {
     if (lock.remote) {
       try {
-        await ReferralsAPI.accept(lock.acceptanceId);
-        request.status = "ALLOCATED";
-        request.assignedHospital = hospital.name;
+         const accepted = await ReferralsAPI.accept(lock.acceptanceId);
+         request.status = "ALLOCATED";
+         request.assignedHospital = hospital.name;
+         // The backend auto-dispatches a unit on accept; ambulance_id is null when none was free.
+         state.lastAcceptedReferral = { requestId: request.requestId, hospitalId: hospital.id, hospitalName: hospital.name, ambulanceId: accepted?.ambulance_id || null };
         state.currentActiveReferral = null;
         recordActivity("REFERRAL_ACCEPTED", `${hospital.name} accepted ${request.requestId}`, "success");
         await refreshWorkspaceData();
-        showNotification(`✓ ${hospital.name} confirmed the referral.`, "success");
+        showNotification(accepted?.ambulance_id
+          ? `✓ ${hospital.name} confirmed the referral. Ambulance ${accepted.ambulance_id} was dispatched automatically.`
+          : `✓ ${hospital.name} confirmed the referral. No ambulance was free to auto-dispatch.`, "success");
+        updateRoadsideDispatchControl();
         renderHospitalAcceptanceView();
       } catch (error) { showNotification(`Acceptance failed: ${error.message}`, "urgent"); }
       return;
@@ -800,6 +839,7 @@ function renderHospitalAcceptanceView() {
       if (request) {
         request.status = "ALLOCATED";
         request.assignedHospital = hospital.name;
+        state.lastAcceptedReferral = { requestId: request.requestId, hospitalId: hospital.id, hospitalName: hospital.name };
       }
       showNotification(`🎉 ${hospital.name} ACCEPTED referral for ${request.patientName}! Bed atomically committed. Ambulance dispatched.`, "success");
       recordActivity("REFERRAL_ACCEPTED", `${hospital.name} accepted ${request.requestId}`, "success");
@@ -861,6 +901,9 @@ function renderEmergencyQueue() {
   }
   filtered.forEach(item => {
     const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    tr.setAttribute("aria-selected", String(item.requestId === state.selectedRequestId));
+    tr.title = "Select this case for hospital matching";
     const priorityBadgeClass = `badge-priority badge-p${item.priority}`;
     const statusMap = {
       'ALLOCATED': 'badge-allocated',
@@ -881,6 +924,18 @@ function renderEmergencyQueue() {
       <td style="font-size: 0.82rem; color: var(--text-secondary);">${item.assignedHospital}</td>
       <td style="font-family: var(--font-mono); font-size: 0.775rem; color: var(--text-muted);">${item.requestTime}</td>
     `;
+    const selectRequest = () => {
+      state.selectedRequestId = item.requestId;
+      renderEmergencyQueue();
+      showNotification(`Selected ${item.requestId} for referral matching.`, "normal");
+    };
+    tr.addEventListener("click", selectRequest);
+    tr.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectRequest();
+      }
+    });
     tbody.appendChild(tr);
   });
   renderCommandOverview();
@@ -1780,6 +1835,7 @@ function renderRoadsideHospitalRecommendation(ranked, analysis) {
           📞 Direct ER: ${topHospital.phone || '108'}
         </a>
       </div>
+      <div id="roadsideDispatchStatus" role="status" aria-live="polite" style="margin-top: 0.6rem; font-size: 0.8rem; color: var(--text-secondary);"></div>
     </div>
 
     <!-- Other Regional Hospitals Comparison Grid -->
@@ -1884,24 +1940,73 @@ function renderRoadsideHospitalRecommendation(ranked, analysis) {
   });
 
   document.getElementById("btnRoadsideDispatchEMS")?.addEventListener("click", async () => {
-    const availableAmb = state.ambulances.find(a => a.status === "AVAILABLE");
-    if (availableAmb) {
-      if (getAuthToken()) {
-        try {
-          await AmbulancesAPI.updateStatus(availableAmb.id, { status: "DISPATCHED", eta_mins: Math.max(3, Math.round(topHospital.distanceKm * 1.5)) });
-          await refreshWorkspaceData();
-        } catch (error) {
-          showNotification(`Dispatch request failed: ${error.message}`, "urgent");
-          return;
+    const referral = state.lastAcceptedReferral;
+    const etaMins = Math.max(3, Math.round(topHospital.distanceKm * 1.5));
+    const result = await dispatchForReferral({
+      referral,
+      awaitingAcceptance: state.currentActiveReferral?.status === "LOCKED_PENDING_RESPONSE",
+      getAmbulances: () => state.ambulances,
+      onChange: updateRoadsideDispatchControl,
+      refresh: async () => { if (getAuthToken()) await refreshWorkspaceData(); },
+      dispatch: async (ambulance) => {
+        if (getAuthToken()) {
+          await AmbulancesAPI.updateStatus(ambulance.id, { status: "DISPATCHED", request_id: referral.requestId, eta_mins: etaMins });
+        } else {
+          // Standalone demo mode has no backend to record the assignment.
+          ambulance.status = "IN_TRANSIT";
+          ambulance.etaMins = etaMins;
+          ambulance.assigned_request_id = referral.requestId;
         }
       }
-      availableAmb.status = "IN_TRANSIT";
-      availableAmb.etaMins = Math.max(3, Math.round(topHospital.distanceKm * 1.5));
+    });
+
+    if (result.ambulance && referral) referral.ambulanceId = result.ambulance.id || result.ambulance.ambulance_id;
+    const label = result.ambulance ? (result.ambulance.id || result.ambulance.ambulance_id) : "";
+    switch (result.outcome) {
+      case "AWAITING_ACCEPTANCE":
+        showNotification("Wait for explicit hospital acceptance before dispatching an ambulance.", "urgent");
+        break;
+      case "NO_ACCEPTED_REFERRAL":
+        showNotification("Accept a hospital referral before dispatching an ambulance.", "urgent");
+        break;
+      case "ALREADY_ASSIGNED":
+        showNotification(`🚑 Ambulance ${label} is already assigned to ${referral.requestId} (${result.ambulance.status}).`, "normal");
+        break;
+      case "IN_FLIGHT":
+        break;
+      case "NO_AMBULANCE":
+        showNotification("No available ambulance is currently eligible for dispatch.", "urgent");
+        break;
+      case "DISPATCHED":
+        showNotification(`🚑 Ambulance ${label} (${result.ambulance.type}) dispatched to ${state.roadside.currentLocation.name}! ETA: ${result.ambulance.etaMins || etaMins} mins.`, "success");
+        break;
+      default:
+        showNotification(`Dispatch request failed: ${result.error?.message || "unknown error"}`, "urgent");
+    }
+    if (["DISPATCHED", "ALREADY_ASSIGNED"].includes(result.outcome)) {
       renderAmbulanceFleet();
       renderKpiCards();
-      showNotification(`🚑 Ambulance ${availableAmb.id} (${availableAmb.type}) dispatched to ${state.roadside.currentLocation.name}! ETA: ${availableAmb.etaMins} mins.`, "success");
-    } else showNotification("No available ambulance is currently eligible for dispatch.", "urgent");
+    }
+    updateRoadsideDispatchControl();
   });
+
+  updateRoadsideDispatchControl();
+}
+
+// Reflects the current assignment on the roadside Dispatch EMS button (no-op if it is not on screen).
+function updateRoadsideDispatchControl() {
+  const button = document.getElementById("btnRoadsideDispatchEMS");
+  if (!button) return;
+  const status = document.getElementById("roadsideDispatchStatus");
+  const control = getDispatchControl({
+    referral: state.lastAcceptedReferral,
+    awaitingAcceptance: state.currentActiveReferral?.status === "LOCKED_PENDING_RESPONSE",
+    ambulances: state.ambulances
+  });
+  button.disabled = control.disabled;
+  button.setAttribute("aria-disabled", String(control.disabled));
+  button.textContent = control.label || "🚑 Dispatch Closest EMS Ambulance";
+  if (status) status.textContent = control.detail;
 }
 
 function openRouteNavigationModal(hospital) {
@@ -2071,7 +2176,7 @@ function applyRoleVisibility() {
   const role = state.currentUser?.role || (state.currentUserRole === "admin" ? "ADMIN" : state.currentUserRole === "hospital" ? "HOSPITAL_DESK" : "PARAMEDIC");
   const restricted = {
     "ADMIN": [],
-    "HOSPITAL_DESK": ["nav-emergency", "nav-roadside", "nav-bankers", "nav-ambulance"],
+    "HOSPITAL_DESK": ["nav-emergency", "nav-roadside", "nav-bankers", "nav-ems"],
     "PARAMEDIC": ["nav-acceptance", "nav-bankers", "nav-doctors", "nav-activity"]
   };
   document.querySelectorAll(".nav-tab-btn").forEach(button => button.classList.remove("locked-tab"));
