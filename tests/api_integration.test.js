@@ -1,11 +1,17 @@
-// API-level verification for the connected development store.
+// API-level verification of the full emergency lifecycle over HTTP.
+// Runs against the in-memory store by default; with API_TEST_BACKEND=mysql (see
+// api_integration_mysql.test.js) the IDENTICAL scenario runs against the real MySQL test database,
+// which is the parity check between the two storage backends.
 // Uses fictional patient data and a disposable server process.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { spawn } from 'node:child_process';
+import { openTestDatabase, mysqlServerEnv } from './helpers/mysqlTestDb.js';
 
-const PORT = 4107;
+const BACKEND = process.env.API_TEST_BACKEND === 'mysql' ? 'mysql' : 'memory';
+const PORT = BACKEND === 'mysql' ? 4117 : 4107;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 async function waitForHealth(server) {
@@ -47,17 +53,35 @@ function auth(token) {
   return { Authorization: `Bearer ${token}` };
 }
 
-test('connected API lifecycle persists read-back state and protects allocation boundaries', async t => {
+test(`connected API lifecycle persists read-back state and protects allocation boundaries [${BACKEND}]`, async t => {
+  let env = { ...process.env, PORT: String(PORT), DB_USE_MEMORY: 'true' };
+  let database = null;
+  if (BACKEND === 'mysql') {
+    database = await openTestDatabase();
+    if (database.skip) {
+      t.skip(database.skip);
+      return;
+    }
+    await database.reset(true); // fresh schema + demo data, test database only
+    env = mysqlServerEnv(PORT);
+  }
+
   const server = spawn(process.execPath, ['server/server.js'], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(PORT), DB_USE_MEMORY: 'true' },
+    env,
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let stderr = '';
   let stdout = '';
   server.stdout.on('data', chunk => { stdout += chunk.toString(); });
   server.stderr.on('data', chunk => { stderr += chunk.toString(); });
-  t.after(() => server.kill('SIGTERM'));
+  t.after(async () => {
+    if (server.exitCode === null) {
+      server.kill('SIGTERM');
+      await once(server, 'exit');
+    }
+    await database?.release();
+  });
 
   const health = await waitForHealth(server);
   assert.equal(health.status, 'OK');
