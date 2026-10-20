@@ -137,6 +137,122 @@ test('a failing audit write or listener does not strand capacity during cancella
   assert.ok(logged.some(line => /audit\/notification failed/.test(line)), 'the failure must be logged, not hidden');
 });
 
+// Silences console.error for the duration of fn and returns what was logged.
+async function captureErrors(fn) {
+  const originalError = console.error;
+  const logged = [];
+  console.error = (...args) => logged.push(args.join(' '));
+  try {
+    await fn();
+  } finally {
+    console.error = originalError;
+  }
+  return logged;
+}
+
+test('a throwing lock_acquired listener neither fails the acquisition nor orphans the lock', async () => {
+  const resource = icu('H-101');
+  const before = { locked: resource.locked_capacity, available: resource.available_capacity };
+  const request = addRequest();
+  const boom = () => { throw new Error('listener failed'); };
+  let lock;
+
+  lockingEngine.on('lock_acquired', boom);
+  const logged = await captureErrors(async () => {
+    try {
+      lock = await lockingEngine.acquireSoftLock('H-101', request.request_id, ['ICU_BED']);
+    } finally {
+      lockingEngine.off('lock_acquired', boom);
+    }
+  });
+
+  // The reservation and the lock that owns it must agree: both present, exactly once.
+  assert.equal(locksFor(request.request_id).length, 1);
+  assert.equal(locksFor(request.request_id)[0].acceptanceId, lock.acceptanceId);
+  assert.equal(resource.locked_capacity, before.locked + 1);
+  assert.ok(logged.some(line => /audit\/notification failed/.test(line)), 'the failure must be logged, not hidden');
+
+  // Releasing that lock gives back exactly the capacity it reserved.
+  request.status = 'CANCELLED';
+  await lockingEngine.cancelPendingForRequest(request.request_id);
+  assert.equal(resource.locked_capacity, before.locked);
+  assert.equal(resource.available_capacity, before.available);
+});
+
+test('a throwing lock_tick listener cannot stop the TTL from expiring the lock', async t => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  t.after(() => mock.timers.reset());
+
+  const resource = icu('H-101');
+  const lockedBefore = resource.locked_capacity;
+  const request = addRequest();
+  const lock = await lockingEngine.acquireSoftLock('H-101', request.request_id, ['ICU_BED']);
+  const boom = () => { throw new Error('tick listener failed'); };
+
+  lockingEngine.on('lock_tick', boom);
+  t.after(() => lockingEngine.off('lock_tick', boom));
+  await captureErrors(async () => {
+    // A throw escaping a timer callback would crash the server process.
+    assert.doesNotThrow(() => mock.timers.tick(90_000));
+    await new Promise(resolve => setImmediate(resolve));
+  });
+
+  assert.equal(acceptanceOf(lock.acceptanceId).status, 'EXPIRED');
+  assert.ok(!locksFor(request.request_id).some(l => l.acceptanceId === lock.acceptanceId));
+
+  request.status = 'CANCELLED';
+  await lockingEngine.cancelPendingForRequest(request.request_id); // drops the failover lock, if any
+  assert.equal(resource.locked_capacity, lockedBefore);
+});
+
+test('a failing audit write after an accepted referral still reports the allocation', async () => {
+  const resource = icu('H-105');
+  const availableBefore = resource.available_capacity;
+  const request = addRequest();
+  const lock = await lockingEngine.acquireSoftLock('H-105', request.request_id, ['ICU_BED']);
+  const boom = entry => { if (entry.event_type === 'ALLOCATION_COMMITTED') throw new Error('audit sink failed'); };
+  let result;
+
+  db.on('audit', boom);
+  const logged = await captureErrors(async () => {
+    try {
+      result = await lockingEngine.commitAllocation(lock.acceptanceId, 'TEST-DESK');
+    } finally {
+      db.off('audit', boom);
+    }
+  });
+
+  // The allocation happened, so the caller must be told it succeeded.
+  assert.equal(result?.status, 'ACCEPTED');
+  assert.equal(request.status, 'ALLOCATED');
+  assert.equal(resource.available_capacity, availableBefore - 1);
+  assert.ok(logged.some(line => /audit\/notification failed/.test(line)));
+});
+
+test('a throwing lock_released listener after a rejection still reports the failover', async () => {
+  const request = addRequest();
+  const lock = await lockingEngine.acquireSoftLock('H-101', request.request_id, ['ICU_BED']);
+  const boom = () => { throw new Error('listener failed'); };
+  let result;
+
+  lockingEngine.on('lock_released', boom);
+  await captureErrors(async () => {
+    try {
+      result = await lockingEngine.rejectAndFailover(lock.acceptanceId, 'No capacity', 'TEST-DESK');
+    } finally {
+      lockingEngine.off('lock_released', boom);
+    }
+  });
+
+  assert.equal(result?.status, 'REJECTED');
+  assert.ok(result.next_acceptance_id);
+  assert.deepEqual(locksFor(request.request_id).map(l => l.acceptanceId), [result.next_acceptance_id]);
+
+  request.status = 'CANCELLED';
+  await lockingEngine.cancelPendingForRequest(request.request_id);
+  assert.equal(locksFor(request.request_id).length, 0);
+});
+
 test('failover never revives a cancelled request', async () => {
   const request = addRequest('CANCELLED');
   const revived = await lockingEngine._tryFailover({
