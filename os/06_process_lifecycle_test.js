@@ -1,0 +1,1 @@
+../tests/lifecycle.test.js

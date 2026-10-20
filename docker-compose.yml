@@ -12,8 +12,18 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
-      - JWT_SECRET=smart_emergency_prod_jwt_secret_key_2026
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in your shell or .env before starting}
       - FRONTEND_URL=http://localhost:4000
+      # Storage mode is explicit. The default keeps today's behaviour: the non-persistent in-memory
+      # DEMO store (data is lost when the container restarts). To use MySQL set DB_USE_MEMORY=false
+      # and provide DB_HOST/DB_NAME/DB_USER/DB_PASS (see .env.example); the app then refuses to
+      # start if MySQL is unreachable instead of silently falling back.
+      - DB_USE_MEMORY=${DB_USE_MEMORY:-true}
+      - DB_HOST=${DB_HOST:-}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_NAME=${DB_NAME:-}
+      - DB_USER=${DB_USER:-}
+      - DB_PASS=${DB_PASS:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 30s

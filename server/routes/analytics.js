@@ -4,37 +4,38 @@
 
 import express from 'express';
 import { authenticate, authorize } from '../middleware/auth.js';
-import { db } from '../db/seed.js';
+import { store } from '../db/store.js';
 
 const router = express.Router();
 
 // GET /api/v1/analytics/dashboard
 // Live command center KPIs
-router.get('/dashboard', authenticate, (req, res) => {
-  const activeEmergencies   = db.emergencyRequests.filter(r => !['COMPLETED', 'CANCELLED'].includes(r.status)).length;
-  const criticalP1           = db.emergencyRequests.filter(r => r.priority === 1 && r.status === 'WAITING').length;
-  const openHospitals        = db.hospitals.filter(h => h.emergency_status === 'OPEN').length;
-  const limitedHospitals     = db.hospitals.filter(h => h.emergency_status === 'LIMITED').length;
-  const closedHospitals      = db.hospitals.filter(h => h.emergency_status === 'CLOSED').length;
-  const availableAmbulances  = db.ambulances.filter(a => a.status === 'AVAILABLE').length;
+router.get('/dashboard', authenticate, async (req, res) => {
+  const { hospitals, medicalResources, doctors, ambulances, emergencyRequests, hospitalAcceptances } = await store.getAnalyticsData();
+  const activeEmergencies   = emergencyRequests.filter(r => !['COMPLETED', 'CANCELLED'].includes(r.status)).length;
+  const criticalP1           = emergencyRequests.filter(r => r.priority === 1 && r.status === 'WAITING').length;
+  const openHospitals        = hospitals.filter(h => h.emergency_status === 'OPEN').length;
+  const limitedHospitals     = hospitals.filter(h => h.emergency_status === 'LIMITED').length;
+  const closedHospitals      = hospitals.filter(h => h.emergency_status === 'CLOSED').length;
+  const availableAmbulances  = ambulances.filter(a => a.status === 'AVAILABLE').length;
 
-  const icuBeds = db.medicalResources.filter(r => r.resource_type === 'ICU_BED');
+  const icuBeds = medicalResources.filter(r => r.resource_type === 'ICU_BED');
   const totalIcuAvail  = icuBeds.reduce((s, r) => s + r.available_capacity, 0);
   const totalIcuLocked = icuBeds.reduce((s, r) => s + r.locked_capacity, 0);
   const totalIcu       = icuBeds.reduce((s, r) => s + r.total_capacity, 0);
 
-  const ventilators = db.medicalResources.filter(r => r.resource_type === 'VENTILATOR');
+  const ventilators = medicalResources.filter(r => r.resource_type === 'VENTILATOR');
   const totalVentAvail = ventilators.reduce((s, r) => s + r.available_capacity, 0);
   const totalVent      = ventilators.reduce((s, r) => s + r.total_capacity, 0);
 
-  const ots = db.medicalResources.filter(r => r.resource_type === 'OT');
+  const ots = medicalResources.filter(r => r.resource_type === 'OT');
   const totalOTAvail = ots.reduce((s, r) => s + r.available_capacity, 0);
 
-  const activeDoctors = db.doctors.filter(d => d.availability_status === 'AVAILABLE').length;
+  const activeDoctors = doctors.filter(d => d.availability_status === 'AVAILABLE').length;
 
   // Hospital capacity color codes (Green >= 20%, Yellow < 20%, Red = 0)
-  const hospitalStatuses = db.hospitals.map(h => {
-    const icu = db.medicalResources.find(r => r.hospital_id === h.hospital_id && r.resource_type === 'ICU_BED');
+  const hospitalStatuses = hospitals.map(h => {
+    const icu = medicalResources.find(r => r.hospital_id === h.hospital_id && r.resource_type === 'ICU_BED');
     const util = icu ? (icu.available_capacity / Math.max(1, icu.total_capacity)) : 0;
     let capacityColor = 'GREEN';
     if (util === 0)    capacityColor = 'RED';
@@ -51,7 +52,7 @@ router.get('/dashboard', authenticate, (req, res) => {
   });
 
   // Average referral response time
-  const acceptedReferrals = db.hospitalAcceptances.filter(a => a.response_time_sec != null);
+  const acceptedReferrals = hospitalAcceptances.filter(a => a.response_time_sec != null);
   const avgResponseSec = acceptedReferrals.length > 0
     ? Math.round(acceptedReferrals.reduce((s, a) => s + a.response_time_sec, 0) / acceptedReferrals.length)
     : 0;
@@ -81,17 +82,28 @@ router.get('/dashboard', authenticate, (req, res) => {
   });
 });
 
+// Acceptance rate over referrals the hospital could actually decide on.
+function acceptanceRate(referrals) {
+  const decidable = referrals.filter(a => a.status !== 'CANCELLED');
+  if (decidable.length === 0) return 0;
+  return Math.round((decidable.filter(a => a.status === 'ACCEPTED').length / decidable.length) * 100);
+}
+
 // GET /api/v1/analytics/referrals
 // Referral acceptance/rejection breakdown
-router.get('/referrals', authenticate, authorize('ADMIN'), (req, res) => {
-  const total    = db.hospitalAcceptances.length;
-  const accepted = db.hospitalAcceptances.filter(a => a.status === 'ACCEPTED').length;
-  const rejected = db.hospitalAcceptances.filter(a => a.status === 'REJECTED').length;
-  const expired  = db.hospitalAcceptances.filter(a => a.status === 'EXPIRED').length;
-  const pending  = db.hospitalAcceptances.filter(a => a.status === 'PENDING').length;
+router.get('/referrals', authenticate, authorize('ADMIN'), async (req, res) => {
+  const { hospitals, hospitalAcceptances } = await store.getAnalyticsData();
+  const total    = hospitalAcceptances.length;
+  const accepted = hospitalAcceptances.filter(a => a.status === 'ACCEPTED').length;
+  const rejected = hospitalAcceptances.filter(a => a.status === 'REJECTED').length;
+  const expired  = hospitalAcceptances.filter(a => a.status === 'EXPIRED').length;
+  const pending  = hospitalAcceptances.filter(a => a.status === 'PENDING').length;
+  // CANCELLED means the case was cancelled/completed while the referral was pending;
+  // the hospital never had a chance to decide, so it is not counted against it.
+  const cancelled = hospitalAcceptances.filter(a => a.status === 'CANCELLED').length;
 
-  const byHospital = db.hospitals.map(h => {
-    const hospitalReferrals = db.hospitalAcceptances.filter(a => a.hospital_id === h.hospital_id);
+  const byHospital = hospitals.map(h => {
+    const hospitalReferrals = hospitalAcceptances.filter(a => a.hospital_id === h.hospital_id);
     return {
       hospital_id:   h.hospital_id,
       hospital_name: h.hospital_name,
@@ -99,39 +111,34 @@ router.get('/referrals', authenticate, authorize('ADMIN'), (req, res) => {
       accepted: hospitalReferrals.filter(a => a.status === 'ACCEPTED').length,
       rejected: hospitalReferrals.filter(a => a.status === 'REJECTED').length,
       expired:  hospitalReferrals.filter(a => a.status === 'EXPIRED').length,
-      acceptance_rate: hospitalReferrals.length > 0
-        ? Math.round((hospitalReferrals.filter(a => a.status === 'ACCEPTED').length / hospitalReferrals.length) * 100)
-        : 0
+      cancelled: hospitalReferrals.filter(a => a.status === 'CANCELLED').length,
+      acceptance_rate: acceptanceRate(hospitalReferrals)
     };
   });
 
   res.json({
     success: true,
-    summary: { total, accepted, rejected, expired, pending },
+    summary: { total, accepted, rejected, expired, pending, cancelled },
     by_hospital: byHospital
   });
 });
 
 // GET /api/v1/analytics/audit
 // Full immutable audit trail (Admin only)
-router.get('/audit', authenticate, authorize('ADMIN'), (req, res) => {
+router.get('/audit', authenticate, authorize('ADMIN'), async (req, res) => {
   const { event_type, hospital_id, limit = 100 } = req.query;
-  let events = [...db.emergencyHistory];
+  const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 1000);
 
-  if (event_type)  events = events.filter(e => e.event_type === event_type);
-  if (hospital_id) events = events.filter(e => e.hospital_id === hospital_id);
-
-  events.sort((a, b) => new Date(b.event_time) - new Date(a.event_time));
-  events = events.slice(0, parseInt(limit, 10));
-
+  const events = await store.listAudit({ eventType: event_type, hospitalId: hospital_id, limit: parsedLimit });
   res.json({ success: true, count: events.length, audit_trail: events });
 });
 
 // GET /api/v1/analytics/resources
 // Resource utilization breakdown per hospital
-router.get('/resources', authenticate, (req, res) => {
-  const utilization = db.hospitals.map(h => {
-    const resources = db.medicalResources.filter(r => r.hospital_id === h.hospital_id);
+router.get('/resources', authenticate, async (req, res) => {
+  const { hospitals, medicalResources } = await store.getAnalyticsData();
+  const utilization = hospitals.map(h => {
+    const resources = medicalResources.filter(r => r.hospital_id === h.hospital_id);
     const summary = {};
     resources.forEach(r => {
       const util = r.total_capacity > 0

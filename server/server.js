@@ -28,11 +28,22 @@ import ambulancesRoutes from './routes/ambulances.js';
 import analyticsRoutes  from './routes/analytics.js';
 
 // Services
-import { lockingEngine } from './services/lockingEngine.js';
-import { authenticate }  from './middleware/auth.js';
-import { db }            from './db/seed.js';
+import { authenticate, getJwtSecret } from './middleware/auth.js';
+import { bootstrapStore } from './db/bootstrap.js';
+import { store } from './db/store.js';
 
 dotenv.config();
+
+// Choose the storage backend BEFORE anything can serve a request. In MySQL mode a connection or
+// schema problem aborts startup: there is deliberately no fallback to the in-memory store.
+let storage;
+try {
+  storage = await bootstrapStore();
+} catch (err) {
+  console.error(`[STARTUP] ${err.message}`);
+  process.exit(1);
+}
+const lockingEngine = storage.store.lockingEngine;
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -85,18 +96,33 @@ app.use('/api/v1/ambulances',  ambulancesRoutes);
 app.use('/api/v1/analytics',   analyticsRoutes);
 
 // ── Health Check ──
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'OK',
+app.get('/health', async (req, res) => {
+  let databaseUp = true;
+  try {
+    databaseUp = await store.ping();
+  } catch {
+    databaseUp = false;
+  }
+  res.status(databaseUp ? 200 : 503).json({
+    status: databaseUp ? 'OK' : 'DEGRADED',
     service: 'Smart Emergency Resource Allocation API',
     version: '2.0.0',
+    storage: storage.config.mode,
+    database: databaseUp ? 'up' : 'down',
     uptime_sec: Math.round(process.uptime()),
     timestamp: new Date().toISOString()
   });
 });
 
 // ── Static Frontend Serving ──
-app.use(express.static(rootDir));
+// Only frontend assets and the documents linked from the UI are public.
+// Never expose rootDir wholesale: it contains server source, tests and config.
+const PUBLIC_DOCS = ['PRD.md', 'WORKFLOW.md', 'AGENTS.md'];
+app.use('/css', express.static(path.join(rootDir, 'css')));
+app.use('/js', express.static(path.join(rootDir, 'js')));
+app.get('/', (req, res) => res.sendFile(path.join(rootDir, 'index.html')));
+app.get('/index.html', (req, res) => res.sendFile(path.join(rootDir, 'index.html')));
+PUBLIC_DOCS.forEach(doc => app.get(`/${doc}`, (req, res) => res.sendFile(path.join(rootDir, doc))));
 
 // ── 404 Handler for API Routes ──
 app.use('/api', (req, res) => {
@@ -114,7 +140,9 @@ app.use((req, res, next) => {
 // ── Global Error Handler ──
 app.use((err, req, res, _next) => {
   console.error('[ERROR]', err.message);
-  res.status(err.status || 500).json({ error: err.message || 'Internal server error.' });
+  const status = err.status || 500;
+  // Server faults (e.g. a failed SQL statement) are logged but never echoed to the client.
+  res.status(status).json({ error: status >= 500 ? 'Internal server error.' : (err.message || 'Request failed.') });
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -133,21 +161,18 @@ const io = new SocketIOServer(httpServer, {
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.split(' ')[1];
   if (!token) {
-    // Allow unauthenticated connections for frontend demo (read-only events)
-    socket.user = { role: 'GUEST', user_id: `GUEST-${socket.id.slice(0, 6)}` };
-    return next();
+    return next(new Error('Authentication required for operational events.'));
   }
   try {
-    socket.user = jwt.verify(token, process.env.JWT_SECRET || 'emergency-system-secret-key-2026');
+    socket.user = jwt.verify(token, getJwtSecret());
     next();
   } catch {
-    socket.user = { role: 'GUEST', user_id: `GUEST-${socket.id.slice(0, 6)}` };
-    next();
+    next(new Error('Invalid or expired socket token.'));
   }
 });
 
 // ── Connection Handler ──
-io.on('connection', (socket) => {
+io.on('connection', async (socket) => {
   console.log(`[WS] Client connected: ${socket.id} (Role: ${socket.user?.role || 'GUEST'})`);
 
   // Join hospital-specific room (for targeted alerts)
@@ -158,29 +183,35 @@ io.on('connection', (socket) => {
   }
   socket.join('command_center'); // All connections get command center updates
 
-  // Send initial state snapshot
-  socket.emit('system:snapshot', {
-    hospitals:  db.hospitals.length,
-    ambulances: db.ambulances.filter(a => a.status === 'AVAILABLE').length,
-    emergencies: db.emergencyRequests.filter(r => !['COMPLETED','CANCELLED'].includes(r.status)).length,
-    active_locks: lockingEngine.getActiveLocks().length,
-    server_time: new Date().toISOString()
-  });
-
   // Client requests latest KPIs
-  socket.on('request:kpis', () => {
-    const kpis = buildKPIs();
-    socket.emit('kpis:update', kpis);
+  socket.on('request:kpis', async () => {
+    try {
+      socket.emit('kpis:update', await store.getKpis());
+    } catch (err) {
+      console.error('[WS] Could not build KPIs:', err.message);
+    }
   });
 
   // Client requests active locks
-  socket.on('request:active_locks', () => {
-    socket.emit('locks:update', lockingEngine.getActiveLocks());
+  socket.on('request:active_locks', async () => {
+    try {
+      socket.emit('locks:update', await store.getActiveLocks());
+    } catch (err) {
+      console.error('[WS] Could not list locks:', err.message);
+    }
   });
 
   socket.on('disconnect', () => {
     console.log(`[WS] Client disconnected: ${socket.id}`);
   });
+
+  // Last, so every handler above is already registered while the (async) snapshot is built.
+  // Send initial state snapshot
+  try {
+    socket.emit('system:snapshot', await store.getSnapshotCounts());
+  } catch (err) {
+    console.error('[WS] Could not build snapshot:', err.message);
+  }
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -212,24 +243,24 @@ lockingEngine.on('lock_tick', (lockData) => {
   });
 });
 
-lockingEngine.on('allocation_committed', (data) => {
+lockingEngine.on('allocation_committed', async (data) => {
   console.log(`[LOCK] Allocation COMMITTED: ${data.acceptanceId}`);
   io.to(`hospital:${data.hospitalId}`).emit('referral:accepted', data);
   io.to('command_center').emit('allocation:committed', data);
   broadcastKPIs();
 
   // Create and broadcast alert
-  const alert = {
-    alert_id:   db.alerts.length + 1,
-    hospital_id: data.hospitalId,
-    request_id:  data.requestId,
-    alert_type:  'INCOMING_REFERRAL',
-    message:     `Referral ${data.requestId} ACCEPTED — resources locked and ambulance dispatch initiated.`,
-    status:      'UNREAD',
-    created_at:  new Date().toISOString()
-  };
-  db.alerts.push(alert);
-  io.to(`hospital:${data.hospitalId}`).emit('alert:new', alert);
+  try {
+    const alert = await store.createAlert({
+      hospital_id: data.hospitalId,
+      request_id:  data.requestId,
+      alert_type:  'INCOMING_REFERRAL',
+      message:     `Referral ${data.requestId} ACCEPTED — resources locked and ambulance dispatch initiated.`
+    });
+    io.to(`hospital:${data.hospitalId}`).emit('alert:new', alert);
+  } catch (err) {
+    console.error('[ALERT] Could not record alert:', err.message);
+  }
 });
 
 lockingEngine.on('lock_released', (data) => {
@@ -250,59 +281,26 @@ lockingEngine.on('lock_expired', (data) => {
 });
 
 // Audit trail events
-db.on('audit', (entry) => {
+store.on('audit', (entry) => {
   io.to('command_center').emit('audit:entry', entry);
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// P2-08: TTL Expiry Background Worker — polls every 30s for zombie locks
-// (Belt-and-suspenders: locking engine handles TTL internally,
-//  this worker catches any edge-case stragglers)
-// ──────────────────────────────────────────────────────────────────────────────
-setInterval(() => {
-  const staleAcceptances = db.hospitalAcceptances.filter(a => {
-    if (a.status !== 'PENDING') return false;
-    const expiresAt = new Date(a.lock_expires_at).getTime();
-    return Date.now() > expiresAt + 5000; // 5s grace period
-  });
-
-  staleAcceptances.forEach(acc => {
-    console.log(`[WORKER] Cleaning up stale soft-lock: ${acc.acceptance_id}`);
-    acc.status = 'EXPIRED';
-    db.auditLog({
-      request_id: acc.request_id,
-      hospital_id: acc.hospital_id,
-      event_type: 'LOCK_EXPIRED_WORKER_CLEANUP',
-      previous_state: 'PENDING',
-      new_state: 'EXPIRED',
-      actor_role: 'SYSTEM',
-      metadata: { acceptance_id: acc.acceptance_id }
-    });
-    io.to('command_center').emit('lock:expired_cleanup', acc);
-  });
-}, 30_000);
+// P2-08: stale-lock cleanup. The in-memory store runs a belt-and-suspenders sweeper and announces
+// what it cleaned; the MySQL store expires locks from their persisted expiry (engine 'lock_expired').
+store.on('lock_cleanup', (acceptance) => {
+  io.to('command_center').emit('lock:expired_cleanup', acceptance);
+});
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
-function buildKPIs() {
-  const icuBeds = db.medicalResources.filter(r => r.resource_type === 'ICU_BED');
-  const vents   = db.medicalResources.filter(r => r.resource_type === 'VENTILATOR');
-
-  return {
-    active_emergencies:    db.emergencyRequests.filter(r => !['COMPLETED','CANCELLED'].includes(r.status)).length,
-    critical_p1:           db.emergencyRequests.filter(r => r.priority === 1 && r.status === 'WAITING').length,
-    icu_available:         icuBeds.reduce((s, r) => s + r.available_capacity, 0),
-    ventilators_available: vents.reduce((s, r) => s + r.available_capacity, 0),
-    hospitals_open:        db.hospitals.filter(h => h.emergency_status === 'OPEN').length,
-    ambulances_available:  db.ambulances.filter(a => a.status === 'AVAILABLE').length,
-    active_locks:          lockingEngine.getActiveLocks().length,
-    timestamp:             new Date().toISOString()
-  };
-}
-
-function broadcastKPIs() {
-  io.to('command_center').emit('kpis:update', buildKPIs());
+async function broadcastKPIs() {
+  if (io.engine.clientsCount === 0) return; // nobody is listening: skip the work (and the DB query)
+  try {
+    io.to('command_center').emit('kpis:update', await store.getKpis());
+  } catch (err) {
+    console.error('[KPI] Broadcast failed:', err.message);
+  }
 }
 
 // Broadcast KPIs every 10 seconds for live dashboard
@@ -321,5 +319,26 @@ httpServer.listen(PORT, () => {
   ╚══════════════════════════════════════════════════════════════════╝
   `);
 });
+
+// ── Graceful shutdown: stop accepting work, then release the database pool ──
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[SHUTDOWN] ${signal} received; closing server and storage.`);
+  const forceExit = setTimeout(() => process.exit(1), 8000);
+  forceExit.unref();
+  try {
+    io.close();
+    await new Promise(resolve => httpServer.close(resolve));
+    await storage.store.close();
+    process.exit(0);
+  } catch (err) {
+    console.error('[SHUTDOWN] Error while closing:', err.message);
+    process.exit(1);
+  }
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 export { app, io };

@@ -3,24 +3,33 @@
 
 import express from 'express';
 import { authenticate, authorize } from '../middleware/auth.js';
-import { db } from '../db/seed.js';
+import { store } from '../db/store.js';
+import { respondStoreError } from '../db/storeErrors.js';
 
 const router = express.Router();
+
+const actorOf = req => ({ role: req.user.role, id: req.user.user_id });
 
 // ────────────────────────────────────────────────────────────
 // GET /api/v1/hospitals
 // All hospitals with their current resource state
 // ────────────────────────────────────────────────────────────
-router.get('/', authenticate, (req, res) => {
-  const { status } = req.query;
-  let hospitals = db.hospitals;
-  if (status) hospitals = hospitals.filter(h => h.emergency_status === status.toUpperCase());
+router.get('/', authenticate, async (req, res) => {
+  const [hospitals, resources, doctors] = await Promise.all([
+    store.listHospitals({ status: req.query.status }),
+    store.listResources(),
+    store.listDoctors()
+  ]);
 
-  const result = hospitals.map(h => ({
-    ...h,
-    resources: buildResourceSummary(h.hospital_id),
-    doctors:   buildDoctorSummary(h.hospital_id)
-  }));
+  const result = hospitals.map(h => {
+    const hospitalDoctors = doctors.filter(d => d.hospital_id === h.hospital_id);
+    return {
+      ...h,
+      resources: buildResourceSummary(resources.filter(r => r.hospital_id === h.hospital_id)),
+      doctors: buildDoctorSummary(hospitalDoctors),
+      specialists: buildSpecialistSummary(hospitalDoctors)
+    };
+  });
 
   res.json({ success: true, count: result.length, hospitals: result });
 });
@@ -29,8 +38,8 @@ router.get('/', authenticate, (req, res) => {
 // GET /api/v1/hospitals/:hospitalId
 // Single hospital with full detail
 // ────────────────────────────────────────────────────────────
-router.get('/:hospitalId', authenticate, (req, res) => {
-  const hospital = db.hospitals.find(h => h.hospital_id === req.params.hospitalId);
+router.get('/:hospitalId', authenticate, async (req, res) => {
+  const hospital = await store.getHospital(req.params.hospitalId);
   if (!hospital) return res.status(404).json({ error: 'Hospital not found.' });
 
   // RBAC: Hospital Desk can only see their own facility
@@ -38,15 +47,20 @@ router.get('/:hospitalId', authenticate, (req, res) => {
     return res.status(403).json({ error: 'Access restricted to your assigned facility.' });
   }
 
+  const [resources, doctors, activeAllocations] = await Promise.all([
+    store.listResources(hospital.hospital_id),
+    store.listDoctors({ hospitalId: hospital.hospital_id }),
+    store.countActiveAllocations(hospital.hospital_id)
+  ]);
+
   res.json({
     success: true,
     hospital: {
       ...hospital,
-      resources: buildResourceSummary(hospital.hospital_id),
-      doctors:   buildDoctorSummary(hospital.hospital_id),
-      activeAllocations: db.resourceAllocations.filter(
-        a => a.hospital_id === hospital.hospital_id && a.status !== 'RELEASED'
-      ).length
+      resources: buildResourceSummary(resources),
+      doctors: buildDoctorSummary(doctors),
+      specialists: buildSpecialistSummary(doctors),
+      activeAllocations
     }
   });
 });
@@ -58,29 +72,16 @@ router.get('/:hospitalId', authenticate, (req, res) => {
 router.patch('/:hospitalId/status',
   authenticate,
   authorize('ADMIN'),
-  (req, res) => {
+  async (req, res) => {
     const { emergency_status } = req.body;
     if (!['OPEN', 'LIMITED', 'CLOSED'].includes(emergency_status)) {
       return res.status(400).json({ error: 'Invalid status. Must be OPEN, LIMITED, or CLOSED.' });
     }
 
-    const hospital = db.hospitals.find(h => h.hospital_id === req.params.hospitalId);
-    if (!hospital) return res.status(404).json({ error: 'Hospital not found.' });
+    const updated = await store.updateHospitalStatus(req.params.hospitalId, emergency_status, actorOf(req));
+    if (!updated) return res.status(404).json({ error: 'Hospital not found.' });
 
-    const previous = hospital.emergency_status;
-    hospital.emergency_status = emergency_status;
-
-    db.auditLog({
-      request_id: 'N/A',
-      hospital_id: hospital.hospital_id,
-      event_type: 'HOSPITAL_STATUS_CHANGED',
-      previous_state: previous,
-      new_state: emergency_status,
-      actor_role: 'ADMIN',
-      actor_id: req.user.user_id
-    });
-
-    res.json({ success: true, hospital_id: hospital.hospital_id, emergency_status });
+    res.json({ success: true, hospital_id: updated.hospital_id, emergency_status: updated.emergency_status });
   }
 );
 
@@ -90,7 +91,8 @@ router.patch('/:hospitalId/status',
 // ────────────────────────────────────────────────────────────
 router.patch('/:hospitalId/resources/:resourceType',
   authenticate,
-  (req, res) => {
+  authorize('ADMIN', 'HOSPITAL_DESK'),
+  async (req, res) => {
     const { hospitalId, resourceType } = req.params;
     const { available_capacity, total_capacity } = req.body;
 
@@ -98,24 +100,21 @@ router.patch('/:hospitalId/resources/:resourceType',
       return res.status(403).json({ error: 'Can only update your own facility resources.' });
     }
 
-    const resource = db.medicalResources.find(
-      r => r.hospital_id === hospitalId && r.resource_type === resourceType.toUpperCase()
-    );
-    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
-
-    if (total_capacity !== undefined)     resource.total_capacity     = parseInt(total_capacity, 10);
-    if (available_capacity !== undefined) resource.available_capacity = parseInt(available_capacity, 10);
-    resource.version_lock += 1;
-
-    res.json({ success: true, resource });
+    try {
+      const resource = await store.updateResourceCapacity(
+        hospitalId, resourceType, { total: total_capacity, available: available_capacity }, actorOf(req)
+      );
+      res.json({ success: true, resource });
+    } catch (err) {
+      if (!respondStoreError(res, err)) throw err;
+    }
   }
 );
 
 // ────────────────────────────────────────────────────────────
-// Helpers
+// Helpers (pure: they summarise rows the store already loaded)
 // ────────────────────────────────────────────────────────────
-function buildResourceSummary(hospitalId) {
-  const resources = db.getHospitalResources(hospitalId);
+function buildResourceSummary(resources) {
   const summary = {};
   resources.forEach(r => {
     const key = r.resource_type.toLowerCase().replace('_', '');
@@ -129,15 +128,34 @@ function buildResourceSummary(hospitalId) {
   return summary;
 }
 
-function buildDoctorSummary(hospitalId) {
-  const docs = db.getDoctors(hospitalId);
-  return docs.map(d => ({
+function buildDoctorSummary(doctors) {
+  return doctors.map(d => ({
     doctor_id:           d.doctor_id,
     name:                d.full_name,
     specialization:      d.specialization,
     availability_status: d.availability_status,
     shift:               `${d.shift_start} - ${d.shift_end}`
   }));
+}
+
+function buildSpecialistSummary(doctors) {
+  const summary = {
+    cardiologist: false,
+    neurologist: false,
+    traumaSurgeon: false,
+    pediatrician: false
+  };
+  const keyBySpecialization = {
+    CARDIOLOGIST: 'cardiologist',
+    NEUROLOGIST: 'neurologist',
+    TRAUMA_SURGEON: 'traumaSurgeon',
+    PEDIATRICIAN: 'pediatrician'
+  };
+  doctors.forEach(doctor => {
+    const key = keyBySpecialization[doctor.specialization];
+    if (key && doctor.availability_status === 'AVAILABLE') summary[key] = true;
+  });
+  return summary;
 }
 
 export default router;

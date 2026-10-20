@@ -16,7 +16,7 @@ COPY . .
 # Set default production environment
 ENV NODE_ENV=production
 ENV PORT=4000
-ENV JWT_SECRET=smart_emergency_resource_jwt_secret_key_2026
+# JWT_SECRET is intentionally not baked into the image; supply it at runtime.
 
 # Expose backend REST API & WebSockets & static frontend
 EXPOSE 4000

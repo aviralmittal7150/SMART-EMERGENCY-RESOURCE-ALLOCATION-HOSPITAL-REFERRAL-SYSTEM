@@ -3,6 +3,7 @@
 
 import express from 'express';
 import bcrypt from 'bcryptjs';
+import { rateLimit } from 'express-rate-limit';
 import { generateToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -80,10 +81,19 @@ const DEMO_USERS = [
  * Body: { username, password }
  * Returns: { token, user }
  */
-router.post('/login', (req, res) => {
-  const { username, password } = req.body;
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 20,
+  message: { error: 'Too many login attempts. Try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
 
-  if (!username || !password) {
+router.post('/login', loginLimiter, (req, res) => {
+  const { username, password } = req.body || {};
+
+
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
     return res.status(400).json({ error: 'Username and password are required.' });
   }
 

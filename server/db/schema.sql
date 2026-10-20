@@ -2,6 +2,9 @@
 -- SMART EMERGENCY RESOURCE ALLOCATION & HOSPITAL REFERRAL SYSTEM
 -- MySQL Schema — Phase 2 DBMS Layer
 -- 10 Normalized Tables with Foreign Keys, Indexes & ACID Support
+-- NOTE: Reference schema only. The running application currently uses the
+-- in-memory store (server/db/seed.js); this schema has not been verified
+-- against a live MySQL server.
 -- ============================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
@@ -89,6 +92,8 @@ CREATE TABLE IF NOT EXISTS EmergencyRequest (
   request_id         VARCHAR(20)  PRIMARY KEY,
   patient_id         VARCHAR(20)  NOT NULL,
   emergency_type     VARCHAR(50)  NOT NULL,
+  required_resources JSON,
+  required_specialist VARCHAR(40),
   priority           TINYINT      NOT NULL DEFAULT 3,
   pickup_lat         DECIMAL(10, 7),
   pickup_lng         DECIMAL(10, 7),
@@ -109,7 +114,7 @@ CREATE TABLE IF NOT EXISTS HospitalAcceptance (
   acceptance_id      VARCHAR(30)  PRIMARY KEY,
   request_id         VARCHAR(20)  NOT NULL,
   hospital_id        VARCHAR(20)  NOT NULL,
-  status             ENUM('PENDING','ACCEPTED','REJECTED','EXPIRED') NOT NULL DEFAULT 'PENDING',
+  status             ENUM('PENDING','ACCEPTED','REJECTED','EXPIRED','CANCELLED') NOT NULL DEFAULT 'PENDING',
   response_time_sec  INT,
   rejection_reason   VARCHAR(300),
   lock_expires_at    TIMESTAMP    NOT NULL,
@@ -153,10 +158,14 @@ CREATE TABLE IF NOT EXISTS Ambulance (
   current_lat        DECIMAL(10, 7),
   current_lng        DECIMAL(10, 7),
   eta_mins           SMALLINT,
+  assigned_request_id     VARCHAR(20) NULL COMMENT 'Case this unit is dispatched to (set on referral acceptance)',
+  destination_hospital_id VARCHAR(20) NULL,
   updated_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (hospital_id) REFERENCES Hospital(hospital_id) ON DELETE CASCADE,
+  FOREIGN KEY (assigned_request_id) REFERENCES EmergencyRequest(request_id) ON DELETE SET NULL,
   INDEX idx_status (status),
-  INDEX idx_hospital (hospital_id)
+  INDEX idx_hospital (hospital_id),
+  INDEX idx_assigned_request (assigned_request_id)
 );
 
 -- ─────────────────────────────────────────────────────────────
@@ -165,7 +174,7 @@ CREATE TABLE IF NOT EXISTS Ambulance (
 -- ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS EmergencyHistory (
   history_id         BIGINT       AUTO_INCREMENT PRIMARY KEY,
-  request_id         VARCHAR(20)  NOT NULL,
+  request_id         VARCHAR(20)  NULL,
   hospital_id        VARCHAR(20),
   event_type         VARCHAR(80)  NOT NULL COMMENT 'e.g. STATUS_CHANGE, LOCK_ACQUIRED, ALLOCATION_COMMITTED, RESOURCE_RELEASED',
   previous_state     VARCHAR(50),
@@ -174,7 +183,7 @@ CREATE TABLE IF NOT EXISTS EmergencyHistory (
   actor_id           VARCHAR(80),
   metadata           JSON,
   event_time         TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  FOREIGN KEY (request_id) REFERENCES EmergencyRequest(request_id) ON DELETE CASCADE,
+  FOREIGN KEY (request_id) REFERENCES EmergencyRequest(request_id) ON DELETE SET NULL,
   INDEX idx_request (request_id),
   INDEX idx_event_time (event_time),
   INDEX idx_event_type (event_type)
