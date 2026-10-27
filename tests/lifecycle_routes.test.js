@@ -286,6 +286,14 @@ test('returning a matching case to the queue releases its pending lock and TTL c
   await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
 });
 
+test('an admin cannot move a case to MATCHING by hand: only placing a referral does that', async () => {
+  const requestId = await createCase();
+  const forced = await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'MATCHING' });
+  assert.equal(forced.status, 409);
+  assert.equal(requestOf(requestId).status, 'WAITING', 'a MATCHING case without a pending referral would be stranded');
+  await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
+});
+
 test('failover refuses a request that has already moved past matching', async () => {
   const requestId = await createCase();
   requestOf(requestId).status = 'ALLOCATED';

@@ -464,6 +464,25 @@ if (skip) {
     assert.equal((await one('SELECT status FROM HospitalAcceptance WHERE acceptance_id = ?', [lock.acceptanceId])).status, 'EXPIRED');
   });
 
+  test('MATCHING is only reachable by placing a referral, never by a manual transition', async () => {
+    const id = await makeRequest();
+    await assert.rejects(engine.transitionRequest(id, 'MATCHING'), /Invalid lifecycle transition/);
+    assert.equal(await requestStatus(id), 'WAITING');
+  });
+
+  test('the sweeper re-queues a case stranded in MATCHING with no pending referral, and leaves real ones alone', async () => {
+    const stranded = await makeRequest({ status: 'MATCHING' }); // e.g. left by a crash before this fix
+    const live = await makeRequest();
+    await engine.acquireSoftLock('H-A', live, ['ICU_BED']);
+
+    assert.equal(await engine.requeueStrandedRequests(), 1);
+    assert.equal(await requestStatus(stranded), 'WAITING');
+    assert.equal(await requestStatus(live), 'MATCHING');
+    const audit = await one('SELECT event_type, previous_state, new_state FROM EmergencyHistory WHERE request_id = ? ORDER BY history_id DESC LIMIT 1', [stranded]);
+    assert.deepEqual({ ...audit }, { event_type: 'STRANDED_MATCHING_REQUEUED', previous_state: 'MATCHING', new_state: 'WAITING' });
+    assert.equal(await engine.requeueStrandedRequests(), 0, 'idempotent');
+  });
+
   // ── Listener failures after commit ────────────────────────────────────────
   // Events fire only once the transaction is durable, so a throwing listener must not
   // turn a committed operation into a reported failure (the caller would retry or give up).

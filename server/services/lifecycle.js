@@ -2,12 +2,14 @@
 // Single source of truth for the emergency request lifecycle, shared by the in-memory
 // and MySQL stores so both enforce exactly the same transitions.
 //
-// MATCHING -> ALLOCATED is deliberately absent: allocation only happens through the hospital
-// acceptance handshake (commitAllocation), never by manual override.
+// These are the MANUAL transitions (PATCH /emergencies/:id/status). Two moves are deliberately absent:
+//  - -> MATCHING: a case is MATCHING exactly while it has a pending referral, so only placing a
+//    referral (the locking engines) may set it; a manual MATCHING would strand the case.
+//  - MATCHING -> ALLOCATED: allocation only happens through the hospital acceptance handshake.
 
 export const ALLOWED_TRANSITIONS = {
   NEW: ['WAITING', 'CANCELLED'],
-  WAITING: ['MATCHING', 'CANCELLED'],
+  WAITING: ['CANCELLED'],
   MATCHING: ['WAITING', 'CANCELLED'],
   ALLOCATED: ['IN_TREATMENT', 'COMPLETED', 'CANCELLED'],
   IN_TREATMENT: ['COMPLETED'],

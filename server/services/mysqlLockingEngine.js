@@ -473,10 +473,46 @@ export class MySqlLockingEngine extends EventEmitter {
     return expired;
   }
 
+  /**
+   * Recovery: a case is MATCHING only while it has a pending referral. One without (left by a crash
+   * between a rejection and its failover in older versions, or by a manual edit) is put back in the
+   * queue so it is visible again. Each case is re-checked under its row lock. Returns how many moved.
+   */
+  async requeueStrandedRequests() {
+    const [rows] = await this.pool.query(
+      `SELECT r.request_id FROM EmergencyRequest r WHERE r.status = 'MATCHING'
+         AND NOT EXISTS (SELECT 1 FROM HospitalAcceptance ha WHERE ha.request_id = r.request_id AND ha.status = 'PENDING')`
+    );
+    let moved = 0;
+    for (const { request_id: requestId } of rows) {
+      try {
+        const requeued = await this._tx(async conn => {
+          const [requests] = await conn.query('SELECT status FROM EmergencyRequest WHERE request_id = ? FOR UPDATE', [requestId]);
+          if (requests[0]?.status !== 'MATCHING') return false;
+          const [pending] = await conn.query(
+            "SELECT acceptance_id FROM HospitalAcceptance WHERE request_id = ? AND status = 'PENDING' FOR UPDATE", [requestId]
+          );
+          if (pending.length) return false;
+          await this._requeue(conn, requestId);
+          await this._audit(conn, {
+            request_id: requestId, event_type: 'STRANDED_MATCHING_REQUEUED', previous_state: 'MATCHING', new_state: 'WAITING'
+          });
+          return true;
+        });
+        if (requeued) moved += 1;
+      } catch (err) {
+        console.error(`[MYSQL-LOCK] Failed to re-queue ${requestId}:`, err.message);
+      }
+    }
+    return moved;
+  }
+
   /** Background sweeper (replaces the in-process 90s timers; survives restarts). Returns a stop function. */
   startExpirySweeper(intervalMs = 5000) {
     const timer = setInterval(() => {
-      this.expireStaleLocks().catch(err => console.error('[MYSQL-LOCK] Sweep failed:', err.message));
+      this.expireStaleLocks()
+        .then(() => this.requeueStrandedRequests())
+        .catch(err => console.error('[MYSQL-LOCK] Sweep failed:', err.message));
     }, intervalMs);
     timer.unref?.();
     return () => clearInterval(timer);
