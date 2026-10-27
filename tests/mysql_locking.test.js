@@ -365,6 +365,42 @@ if (skip) {
     assert.ok(active[0].remainingSec >= 88 && active[0].remainingSec <= 90, `got ${active[0].remainingSec}`);
   });
 
+  // ── Hospital eligibility is enforced under the lock, not only by the route ──
+  test('a CLOSED hospital cannot receive a referral, even when the caller skips the route checks', async () => {
+    const id = await makeRequest();
+    await assert.rejects(engine.acquireSoftLock('H-C', id, ['ICU_BED']), err => err instanceof LockError && /CLOSED/.test(err.message));
+    assert.deepEqual(await resource('H-C', 'ICU_BED'), { available: 5, locked: 0 });
+    assert.equal(await requestStatus(id), 'WAITING');
+  });
+
+  test('a hospital without the required specialist on duty cannot receive the referral', async () => {
+    const id = await makeRequest({ specialist: 'CARDIOLOGIST' });
+    await assert.rejects(engine.acquireSoftLock('H-B', id, ['ICU_BED']), err => err instanceof LockError && /CARDIOLOGIST/.test(err.message));
+    assert.deepEqual(await resource('H-B', 'ICU_BED'), { available: 2, locked: 0 });
+    assert.ok(await engine.acquireSoftLock('H-A', id, ['ICU_BED']), 'H-A has its cardiologist on duty');
+  });
+
+  test('a referral racing an in-flight hospital closure waits for it and is then refused', async () => {
+    const id = await makeRequest();
+    const closer = await pool.getConnection();
+    try {
+      await closer.beginTransaction();
+      await closer.query("UPDATE Hospital SET emergency_status = 'CLOSED' WHERE hospital_id = 'H-D'");
+
+      let settled = false;
+      const pending = engine.acquireSoftLock('H-D', id, ['ICU_BED']).finally(() => { settled = true; });
+      const outcome = pending.then(() => 'granted', err => err.message);
+      await sleep(400);
+      assert.equal(settled, false, 'the referral must wait for the closure, not read around it');
+
+      await closer.commit();
+      assert.match(await outcome, /CLOSED/);
+    } finally {
+      closer.release();
+    }
+    assert.deepEqual(await resource('H-D', 'ICU_BED'), { available: 3, locked: 0 });
+  });
+
   // ── Failover after a committed rejection / expiry ─────────────────────────
   // The rejection commits first and failover runs afterwards, in its own transactions. Whatever happens
   // in between (a crash, a lost connection, a competing referral) must leave a valid, recoverable state.

@@ -40,6 +40,7 @@ class LockingEngine extends EventEmitter {
     }
 
     this._assertRequestAllocatable(requestId);
+    this._assertHospitalEligible(hospitalId, requestId);
 
     const duplicateRequest = [...this._activeLocks.values()].find(lock => lock.requestId === requestId);
     if (duplicateRequest) {
@@ -78,7 +79,9 @@ class LockingEngine extends EventEmitter {
       // Waiting for the row mutexes can yield for real time, during which the
       // request may have been cancelled/completed. Re-check now that nothing
       // can interleave before the lock is registered; the catch block rolls back.
+      // The hospital may also have closed, or its specialist gone off duty, meanwhile.
       this._assertRequestAllocatable(requestId);
+      this._assertHospitalEligible(hospitalId, requestId);
 
       const acceptanceId = `ACC-${uuidv4().slice(0, 8).toUpperCase()}`;
       const expiresAt = Date.now() + SOFT_LOCK_TTL_MS;
@@ -531,6 +534,20 @@ class LockingEngine extends EventEmitter {
   _assertRequestAllocatable(requestId) {
     const status = this._terminalRequestStatus(requestId);
     if (status) throw new Error(`Request ${requestId} is ${status} and cannot receive a referral.`);
+  }
+
+  // A referral may only target an open hospital that has the case's required specialist on duty.
+  // The route pre-checks this too, but only this check runs where nothing can interleave.
+  _assertHospitalEligible(hospitalId, requestId) {
+    const hospital = db.hospitals.find(h => h.hospital_id === hospitalId);
+    if (hospital?.emergency_status === 'CLOSED') {
+      throw new Error(`Hospital ${hospitalId} is CLOSED and cannot receive a referral.`);
+    }
+    const specialist = db.emergencyRequests.find(r => r.request_id === requestId)?.required_specialist;
+    if (specialist && !db.doctors.some(d => d.hospital_id === hospitalId
+      && d.specialization === specialist && d.availability_status === 'AVAILABLE')) {
+      throw new Error(`Required specialist ${specialist} is not available at ${hospitalId}.`);
+    }
   }
 
   _releaseSoftLocks(lockEntry) {

@@ -126,9 +126,11 @@ export class MySqlLockingEngine extends EventEmitter {
 
   async _acquire(conn, hospitalId, requestId, types) {
     // 1. Per-request mutex: every mutator of this request's lock state starts here.
-    const [requests] = await conn.query('SELECT status FROM EmergencyRequest WHERE request_id = ? FOR UPDATE', [requestId]);
+  //    Lock order: EmergencyRequest -> HospitalAcceptance -> Hospital (shared) -> Doctor (shared)
+  //    -> MedicalResource (sorted by type). Other writers of Hospital / Doctor hold only that one row.
+    const [requests] = await conn.query('SELECT status, required_specialist FROM EmergencyRequest WHERE request_id = ? FOR UPDATE', [requestId]);
     if (!requests.length) throw new LockError(`Emergency request ${requestId} not found.`, 'NOT_FOUND');
-    const status = requests[0].status;
+    const { status, required_specialist: specialist } = requests[0];
     if (!MATCHING_STATES.includes(status)) {
       throw new LockError(`Request ${requestId} is ${status} and cannot receive a referral.`);
     }
@@ -137,6 +139,19 @@ export class MySqlLockingEngine extends EventEmitter {
       "SELECT acceptance_id FROM HospitalAcceptance WHERE request_id = ? AND status = 'PENDING' FOR UPDATE", [requestId]
     );
     if (pending.length) throw new LockError(`Request ${requestId} already has an active referral lock.`);
+
+    // Hospital eligibility, checked under shared locks so a concurrent closure or specialist going off
+    // duty is serialised with this referral instead of slipping in after an unlocked pre-check.
+    const [hospitals] = await conn.query('SELECT emergency_status FROM Hospital WHERE hospital_id = ? FOR SHARE', [hospitalId]);
+    if (!hospitals.length) throw new LockError(`Hospital ${hospitalId} not found.`, 'NOT_FOUND');
+    if (hospitals[0].emergency_status === 'CLOSED') throw new LockError(`Hospital ${hospitalId} is CLOSED and cannot receive a referral.`);
+    if (specialist) {
+      const [doctors] = await conn.query(
+        "SELECT doctor_id FROM Doctor WHERE hospital_id = ? AND specialization = ? AND availability_status = 'AVAILABLE' LIMIT 1 FOR SHARE",
+        [hospitalId, specialist]
+      );
+      if (!doctors.length) throw new LockError(`Required specialist ${specialist} is not available at ${hospitalId}.`);
+    }
 
     // 2. Resource rows, always in sorted type order (global lock ordering => no lock cycles).
     const resourceIds = [];
