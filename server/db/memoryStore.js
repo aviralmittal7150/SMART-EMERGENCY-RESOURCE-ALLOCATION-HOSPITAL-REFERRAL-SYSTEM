@@ -10,8 +10,11 @@ import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import { db as defaultDb } from './seed.js';
 import { lockingEngine as defaultEngine } from '../services/lockingEngine.js';
-import { canTransition, TERMINAL_STATES } from '../services/lifecycle.js';
+import { canTransition, TERMINAL_STATES, ON_ROAD_AMBULANCE_STATUSES as ON_ROAD_STATUSES, transportRequired } from '../services/lifecycle.js';
 import { StoreError } from './storeErrors.js';
+
+// Setting a unit to one of these ends its assignment to a case.
+const UNASSIGNING_STATUSES = ['AVAILABLE', 'MAINTENANCE'];
 
 export class MemoryStore extends EventEmitter {
   constructor({ db = defaultDb, lockingEngine = defaultEngine } = {}) {
@@ -211,7 +214,14 @@ export class MemoryStore extends EventEmitter {
     requests.sort((a, b) => (a.priority !== b.priority)
       ? a.priority - b.priority
       : new Date(a.request_time) - new Date(b.request_time));
-    return requests.map(r => ({ ...r, patient: this.db.patients.find(p => p.patient_id === r.patient_id) }));
+    return requests.map(r => ({ ...this._withTransport(r), patient: this.db.patients.find(p => p.patient_id === r.patient_id) }));
+  }
+
+  /** The case as shown to clients, with its usable ambulance (if any) and whether transport is still needed. */
+  _withTransport(request) {
+    const unit = this.db.ambulances.find(a => a.assigned_request_id === request.request_id && ON_ROAD_STATUSES.includes(a.status));
+    const assigned = unit?.ambulance_id ?? null;
+    return { ...request, assigned_ambulance_id: assigned, transport_required: transportRequired(request.status, assigned) };
   }
 
   async getRequest(requestId) {
@@ -222,7 +232,7 @@ export class MemoryStore extends EventEmitter {
     const request = await this.getRequest(requestId);
     if (!request || !this._visible(requestId, hospitalScope)) return null;
     return {
-      request,
+      request: this._withTransport(request),
       patient: this.db.patients.find(p => p.patient_id === request.patient_id),
       allocations: this.db.resourceAllocations.filter(a => a.request_id === requestId),
       acceptances: this.db.hospitalAcceptances.filter(a => a.request_id === requestId),
@@ -339,11 +349,14 @@ export class MemoryStore extends EventEmitter {
             resource.version_lock += 1;
           }
         });
+      // Units serving the case leave it; only those on the road return to the pool. A unit that was
+      // taken out of service (MAINTENANCE) stays out, or it would be auto-dispatched to the next case.
       this.db.ambulances
         .filter(a => a.assigned_request_id === requestId)
         .forEach(a => {
-          a.status = 'AVAILABLE';
+          if (ON_ROAD_STATUSES.includes(a.status)) a.status = 'AVAILABLE';
           delete a.assigned_request_id;
+          delete a.destination_hospital_id;
           a.updated_at = new Date().toISOString();
         });
     }
@@ -461,19 +474,26 @@ export class MemoryStore extends EventEmitter {
     }
 
     const previous = amb.status;
+    const releasedFrom = UNASSIGNING_STATUSES.includes(status) ? amb.assigned_request_id ?? null : null;
     amb.status = status;
     if (status === 'DISPATCHED') amb.assigned_request_id = request_id;
-    if (status === 'AVAILABLE') delete amb.assigned_request_id;
+    // Back at station, or out of service: either way the unit no longer serves its case, which must
+    // then be able to receive a replacement.
+    if (UNASSIGNING_STATUSES.includes(status)) {
+      delete amb.assigned_request_id;
+      delete amb.destination_hospital_id;
+    }
     if (current_lat !== undefined) amb.current_lat = current_lat;
     if (current_lng !== undefined) amb.current_lng = current_lng;
     if (eta_mins !== undefined) amb.eta_mins = eta_mins;
     amb.updated_at = new Date().toISOString();
 
+    // A unit leaving a case is recorded on that case's own trail, so the loss of transport is visible there.
     this.db.auditLog({
-      request_id: status === 'DISPATCHED' ? request_id : null, hospital_id: amb.hospital_id,
+      request_id: status === 'DISPATCHED' ? request_id : releasedFrom, hospital_id: amb.hospital_id,
       event_type: 'AMBULANCE_STATUS_CHANGED', previous_state: previous, new_state: status,
       actor_role: actor.role, actor_id: actor.id,
-      metadata: { ambulance_id: amb.ambulance_id, vehicle_number: amb.vehicle_number }
+      metadata: { ambulance_id: amb.ambulance_id, vehicle_number: amb.vehicle_number, released_from_request: releasedFrom }
     });
     return amb;
   }

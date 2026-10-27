@@ -15,6 +15,7 @@ import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import { MySqlLockingEngine, LockError } from '../services/mysqlLockingEngine.js';
 import { StoreError } from './storeErrors.js';
+import { ON_ROAD_AMBULANCE_STATUSES, transportRequired } from '../services/lifecycle.js';
 
 const ER_DUP_ENTRY = 1062;
 const ER_LOCK_WAIT_TIMEOUT = 1205;
@@ -24,6 +25,16 @@ const ER_LOCK_DEADLOCK = 1213;
 const DOCTOR_COLUMNS = `d.doctor_id, d.hospital_id, d.full_name, d.specialization, d.availability_status,
   TIME_FORMAT(d.shift_start, '%H:%i') AS shift_start, TIME_FORMAT(d.shift_end, '%H:%i') AS shift_end,
   d.created_at, COALESCE(h.hospital_name, 'Unknown') AS hospital_name`;
+
+// The case's usable ambulance: assigned to it AND on the road (see lifecycle.js ON_ROAD_AMBULANCE_STATUSES).
+const ASSIGNED_AMBULANCE_SQL = `(SELECT a.ambulance_id FROM Ambulance a WHERE a.assigned_request_id = r.request_id
+   AND a.status IN (${ON_ROAD_AMBULANCE_STATUSES.map(s => `'${s}'`).join(', ')}) ORDER BY a.ambulance_id LIMIT 1) AS assigned_ambulance_id`;
+
+function withTransport(request) {
+  if (!request) return null;
+  const assigned = request.assigned_ambulance_id ?? null;
+  return { ...request, assigned_ambulance_id: assigned, transport_required: transportRequired(request.status, assigned) };
+}
 
 /** Internal signal: the Idempotency-Key already exists, so the create must replay instead of insert. */
 class IdempotentReplay extends Error {}
@@ -300,10 +311,10 @@ export class MySqlStore extends EventEmitter {
       params.push(hospitalScope);
     }
     const requests = (await this._rows(
-      `SELECT r.* FROM EmergencyRequest r ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      `SELECT r.*, ${ASSIGNED_AMBULANCE_SQL} FROM EmergencyRequest r ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY r.priority ASC, r.request_time ASC, r.request_id ASC`,
       params
-    )).map(mapRequest);
+    )).map(row => withTransport(mapRequest(row)));
     if (!requests.length) return [];
 
     const patients = await this._rows('SELECT * FROM Patient WHERE patient_id IN (?)', [[...new Set(requests.map(r => r.patient_id))]]);
@@ -316,7 +327,9 @@ export class MySqlStore extends EventEmitter {
   }
 
   async getRequestDetail(requestId, { hospitalScope } = {}) {
-    const request = await this.getRequest(requestId);
+    const request = withTransport(mapRequest(await this._row(
+      `SELECT r.*, ${ASSIGNED_AMBULANCE_SQL} FROM EmergencyRequest r WHERE r.request_id = ?`, [requestId]
+    )));
     if (!request || !(await this._visible(requestId, hospitalScope))) return null;
     const [patient, allocations, acceptances, auditEvents] = await Promise.all([
       this._row('SELECT * FROM Patient WHERE patient_id = ?', [request.patient_id]),
@@ -509,9 +522,22 @@ export class MySqlStore extends EventEmitter {
         }
       }
 
+      // A unit going back to station or out of service leaves its case, and the audit row is written on
+      // that case. Lock the case row first here too, so this path keeps the global lock order.
+      const unassigning = status === 'AVAILABLE' || status === 'MAINTENANCE';
+      let releasedFrom = null;
+      if (unassigning) {
+        const [[current]] = await conn.query('SELECT assigned_request_id FROM Ambulance WHERE ambulance_id = ?', [ambulanceId]);
+        releasedFrom = current?.assigned_request_id ?? null;
+        if (releasedFrom) await conn.query('SELECT request_id FROM EmergencyRequest WHERE request_id = ? FOR UPDATE', [releasedFrom]);
+      }
+
       const [ambulances] = await conn.query('SELECT * FROM Ambulance WHERE ambulance_id = ? FOR UPDATE', [ambulanceId]);
       if (!ambulances.length) throw new StoreError(404, 'Ambulance not found.');
       const amb = ambulances[0];
+      if (unassigning && (amb.assigned_request_id ?? null) !== releasedFrom) {
+        throw new StoreError(409, 'The ambulance assignment changed concurrently. Please retry.');
+      }
 
       if (status === 'DISPATCHED') {
         if (amb.status !== 'AVAILABLE') throw new StoreError(409, 'Ambulance is not available for dispatch.');
@@ -526,17 +552,20 @@ export class MySqlStore extends EventEmitter {
       const sets = ['status = ?'];
       const params = [status];
       if (status === 'DISPATCHED') { sets.push('assigned_request_id = ?'); params.push(request_id); }
-      if (status === 'AVAILABLE') { sets.push('assigned_request_id = NULL', 'destination_hospital_id = NULL'); }
+      // Back at station, or out of service: either way the unit no longer serves its case, which must
+      // then be able to receive a replacement.
+      if (unassigning) { sets.push('assigned_request_id = NULL', 'destination_hospital_id = NULL'); }
       if (current_lat !== undefined) { sets.push('current_lat = ?'); params.push(current_lat); }
       if (current_lng !== undefined) { sets.push('current_lng = ?'); params.push(current_lng); }
       if (eta_mins !== undefined) { sets.push('eta_mins = ?'); params.push(eta_mins); }
       await conn.query(`UPDATE Ambulance SET ${sets.join(', ')} WHERE ambulance_id = ?`, [...params, ambulanceId]);
 
+      // A unit leaving a case is recorded on that case's own trail, so the loss of transport is visible there.
       await this.lockingEngine.audit(conn, {
-        request_id: status === 'DISPATCHED' ? request_id : null, hospital_id: amb.hospital_id,
+        request_id: status === 'DISPATCHED' ? request_id : releasedFrom, hospital_id: amb.hospital_id,
         event_type: 'AMBULANCE_STATUS_CHANGED', previous_state: amb.status, new_state: status,
         actor_role: actor.role, actor_id: actor.id,
-        metadata: { ambulance_id: amb.ambulance_id, vehicle_number: amb.vehicle_number }
+        metadata: { ambulance_id: amb.ambulance_id, vehicle_number: amb.vehicle_number, released_from_request: releasedFrom }
       });
       const [[updated]] = await conn.query('SELECT * FROM Ambulance WHERE ambulance_id = ?', [ambulanceId]);
       return updated;

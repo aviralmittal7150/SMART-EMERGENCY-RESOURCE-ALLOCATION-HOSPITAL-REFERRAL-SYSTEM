@@ -46,6 +46,20 @@ test('control: a released (AVAILABLE) unit from an earlier assignment is not tre
   assert.equal(control.disabled, false);
 });
 
+test('control: the accepted unit that has since gone to MAINTENANCE is not shown as assigned, and dispatch stays open', () => {
+  // The accept response named AMB-01; it broke down (MAINTENANCE clears its assignment on the server).
+  const ambulances = [amb('AMB-01', { status: 'MAINTENANCE' }), amb('AMB-03')];
+  const control = getDispatchControl({ referral: { ...referral, ambulanceId: 'AMB-01' }, ambulances, inFlight: new Set() });
+  assert.equal(control.state, 'DISPATCHABLE', 'an out-of-service unit must not be presented as the transport');
+  assert.equal(control.disabled, false);
+  assert.equal(findAssignedAmbulance(ambulances, { ...referral, ambulanceId: 'AMB-01' }), null);
+});
+
+test('control: an assigned_request_id on an out-of-service unit (data from older versions) does not count as transport', () => {
+  const ambulances = [amb('AMB-01', { status: 'MAINTENANCE', assigned_request_id: 'REQ-1' }), amb('AMB-03')];
+  assert.equal(getDispatchControl({ referral, ambulances, inFlight: new Set() }).state, 'DISPATCHABLE');
+});
+
 test('control: an accepted case with no assigned ambulance keeps dispatch available', () => {
   const control = getDispatchControl({ referral, ambulances: [amb('AMB-03')], inFlight: new Set() });
   assert.equal(control.state, 'DISPATCHABLE');

@@ -588,8 +588,12 @@ export class MySqlLockingEngine extends EventEmitter {
         }
         await this._setAllocations(conn, committed, 'RELEASED');
         released = committed.length;
+        // Units serving the case leave it; only those on the road return to the pool. A unit that is out
+        // of service (MAINTENANCE) stays out, or the next accept would auto-dispatch it.
         await conn.query(
-          "UPDATE Ambulance SET status = 'AVAILABLE', assigned_request_id = NULL, destination_hospital_id = NULL WHERE assigned_request_id = ?",
+          `UPDATE Ambulance SET status = IF(status IN ('DISPATCHED', 'IN_TRANSIT'), 'AVAILABLE', status),
+                                assigned_request_id = NULL, destination_hospital_id = NULL
+           WHERE assigned_request_id = ?`,
           [requestId]
         );
       }

@@ -948,7 +948,7 @@ function renderEmergencyQueue() {
       <td style="font-size: 0.84rem;">${item.emergencyType}</td>
       <td><span class="${priorityBadgeClass}">P${item.priority}</span></td>
       <td><span class="badge-status ${statusBadgeClass}">${item.status}</span></td>
-      <td style="font-size: 0.82rem; color: var(--text-secondary);">${item.assignedHospital}</td>
+      <td style="font-size: 0.82rem; color: var(--text-secondary);">${item.assignedHospital}${transportRequiredBadge(item)}</td>
       <td style="font-family: var(--font-mono); font-size: 0.775rem; color: var(--text-muted);">${item.requestTime}</td>
     `;
     const selectRequest = () => {
@@ -966,6 +966,14 @@ function renderEmergencyQueue() {
     tbody.appendChild(tr);
   });
   renderCommandOverview();
+}
+
+// An accepted case with no usable ambulance (none was free, or its unit went out of service).
+// The server computes transport_required; standalone demo cases do not carry it.
+function transportRequiredBadge(item) {
+  return item.transport_required
+    ? ` <span class="badge-status badge-closed transport-required-badge" title="No usable ambulance is assigned">🚑 Transport required</span>`
+    : "";
 }
 
 // Hospitals Directory Render
@@ -1066,7 +1074,7 @@ function renderCommandOverview() {
       <td class="font-mono">${item.requestId}</td><td><strong>${item.patientName}</strong><small>${item.emergencyType}</small></td>
       <td><span class="badge-priority badge-p${item.priority}">P${item.priority}</span></td>
       <td><span class="badge-status badge-${commandStatusClasses[item.status] || "new"}">${String(item.status).replace("_", " ")}</span></td>
-      <td>${item.assignedHospital || "Matching"}</td></tr>`).join("") : `<tr><td colspan="5"><div class="empty-state"><strong>Queue clear</strong>No active cases are awaiting coordination.</div></td></tr>`;
+      <td>${item.assignedHospital || "Matching"}${transportRequiredBadge(item)}</td></tr>`).join("") : `<tr><td colspan="5"><div class="empty-state"><strong>Queue clear</strong>No active cases are awaiting coordination.</div></td></tr>`;
   }
 
   const referralSummary = document.getElementById("commandReferralSummary");

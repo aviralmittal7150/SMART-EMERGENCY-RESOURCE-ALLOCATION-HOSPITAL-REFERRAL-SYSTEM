@@ -204,6 +204,89 @@ if (handle.skip) {
     assert.equal(await count('SELECT COUNT(*) AS n FROM Ambulance WHERE assigned_request_id = ?', [id]), 1);
   });
 
+  test('a unit taken out of service mid-case frees the case for a replacement and is never returned to AVAILABLE by closing it', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Breakdown');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    const accepted = await call(`/api/v1/referrals/${lock.body.acceptance_id}/accept`, tokens.desk103, 'POST');
+    const brokenUnit = accepted.body.ambulance_id;
+    assert.ok(brokenUnit, 'precondition: accept dispatched a unit');
+
+    const detail = async () => (await call(`/api/v1/emergencies/${id}`, tokens.admin)).body.request;
+    assert.deepEqual([(await detail()).assigned_ambulance_id, (await detail()).transport_required], [brokenUnit, false]);
+
+    assert.equal((await call(`/api/v1/ambulances/${brokenUnit}/status`, tokens.paramedic, 'PATCH', { status: 'MAINTENANCE' })).status, 200);
+
+    // The case stays visible and active, and both views say it needs transport.
+    const listed = (await call('/api/v1/emergencies', tokens.admin)).body.queue.find(r => r.request_id === id);
+    for (const view of [await detail(), listed]) {
+      assert.deepEqual([view.status, view.assigned_ambulance_id, view.transport_required], ['ALLOCATED', null, true]);
+    }
+    const trail = (await call(`/api/v1/emergencies/${id}/audit`, tokens.admin)).body.audit_trail;
+    const left = trail.find(e => e.event_type === 'AMBULANCE_STATUS_CHANGED' && e.new_state === 'MAINTENANCE');
+    assert.ok(left, 'the breakdown is in the case audit trail');
+    assert.equal(left.metadata.released_from_request, id);
+    assert.equal((await call(`/api/v1/ambulances/${brokenUnit}/status`, tokens.paramedic, 'PATCH', { status: 'DISPATCHED', request_id: id })).status, 409,
+      'an out-of-service unit cannot be re-dispatched');
+
+    const spare = (await call('/api/v1/ambulances?status=AVAILABLE', tokens.admin)).body.ambulances[0];
+    const replacement = await call(`/api/v1/ambulances/${spare.ambulance_id}/status`, tokens.paramedic, 'PATCH', { status: 'DISPATCHED', request_id: id });
+    assert.equal(replacement.status, 200, `replacement refused: ${replacement.body?.error}`);
+    assert.deepEqual([(await detail()).assigned_ambulance_id, (await detail()).transport_required], [spare.ambulance_id, false]);
+
+    assert.equal((await call(`/api/v1/emergencies/${id}/status`, tokens.admin, 'PATCH', { status: 'COMPLETED' })).status, 200);
+    const statusOf = async unit => (await sqlOne('SELECT status AS s FROM Ambulance WHERE ambulance_id = ?', [unit])).s;
+    assert.equal(await statusOf(brokenUnit), 'MAINTENANCE', 'an out-of-service vehicle must not re-enter the dispatch pool');
+    assert.equal(await statusOf(spare.ambulance_id), 'AVAILABLE');
+    assert.equal(await count('SELECT COUNT(*) AS n FROM Ambulance WHERE assigned_request_id = ?', [id]), 0);
+  });
+
+  test('no lifecycle path (rejection, TTL expiry, accept, cancel) returns an out-of-service unit to the pool', async () => {
+    await sql("UPDATE Ambulance SET status = 'MAINTENANCE', assigned_request_id = NULL WHERE ambulance_id = 'AMB-01'");
+    // Every other unit is busy: AMB-01 is the only unit the pool could wrongly hand out.
+    await sql("UPDATE Ambulance SET status = 'IN_TRANSIT' WHERE ambulance_id <> 'AMB-01'");
+    const amb01 = async () => (await sqlOne("SELECT status AS s FROM Ambulance WHERE ambulance_id = 'AMB-01'")).s;
+
+    // Rejection + failover, then a real TTL expiry handled by the server's own sweeper.
+    const rejected = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Pool Reject');
+    const first = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: rejected, hospital_id: 'H-103' });
+    const reject = await call(`/api/v1/referrals/${first.body.acceptance_id}/reject`, tokens.desk103, 'POST', { rejection_reason: 'Full' });
+    assert.equal(reject.status, 200);
+    assert.ok(reject.body.next_acceptance_id, 'precondition: failover placed a new lock, so the TTL path below really runs');
+    await sql('UPDATE HospitalAcceptance SET lock_expires_at = NOW() - INTERVAL 1 SECOND WHERE acceptance_id = ?', [reject.body.next_acceptance_id]);
+    const deadline = Date.now() + 9000; // the server's sweeper runs every 5 s
+    while ((await sqlOne('SELECT status AS s FROM HospitalAcceptance WHERE acceptance_id = ?', [reject.body.next_acceptance_id])).s === 'PENDING') {
+      assert.ok(Date.now() < deadline, 'the sweeper expired the lock');
+      await sleep(250);
+    }
+    assert.equal(await amb01(), 'MAINTENANCE', 'rejection / failover / TTL expiry');
+
+    // An accept with no usable unit: nothing is claimed, and the case says transport is needed.
+    const other = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Pool Accept');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: other, hospital_id: 'H-103' });
+    const accepted = await call(`/api/v1/referrals/${lock.body.acceptance_id}/accept`, tokens.desk103, 'POST');
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.body.ambulance_id, null);
+    const view = (await call(`/api/v1/emergencies/${other}`, tokens.admin)).body.request;
+    assert.deepEqual([view.assigned_ambulance_id, view.transport_required], [null, true]);
+
+    for (const [requestId, status] of [[other, 'COMPLETED'], [rejected, 'CANCELLED']]) {
+      assert.equal((await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status })).status, 200);
+    }
+    assert.equal(await amb01(), 'MAINTENANCE', 'accept / completion / cancellation');
+  });
+
+  test('closing a case never puts an assigned unit that is out of service back in the pool (rows written before this fix)', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Legacy Breakdown');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    const unit = (await call(`/api/v1/referrals/${lock.body.acceptance_id}/accept`, tokens.desk103, 'POST')).body.ambulance_id;
+    // State an older version could leave behind: MAINTENANCE but still assigned to the case.
+    await sql("UPDATE Ambulance SET status = 'MAINTENANCE' WHERE ambulance_id = ?", [unit]);
+
+    assert.equal((await call(`/api/v1/emergencies/${id}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' })).status, 200);
+    const row = await sqlOne('SELECT status, assigned_request_id FROM Ambulance WHERE ambulance_id = ?', [unit]);
+    assert.deepEqual({ ...row }, { status: 'MAINTENANCE', assigned_request_id: null });
+  });
+
   test('10 cancel-vs-accept races over HTTP never leave the case allocated or capacity leaked', async () => {
     for (let round = 0; round < 10; round += 1) {
       const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', `Fictional Cancel Race ${round}`);
