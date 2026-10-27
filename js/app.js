@@ -91,6 +91,9 @@ const state = {
   }
 };
 
+// Guards the roadside 1-click pre-alert (its button is re-rendered, so the flag lives here).
+let roadsidePreAlertInFlight = false;
+
 // Initialize Modules
 const bankersEngine = new BankersAlgorithm();
 const lockManager = new LockManager((lockState) => {
@@ -526,8 +529,21 @@ function attachFormListeners() {
   const form = document.getElementById("emergencyIntakeForm");
   if (!form) return;
 
+  // One Idempotency-Key per intended submission: a retry after a failure or timeout reuses it (the
+  // server returns the original case), while editing the form starts a new request with a new key.
+  let intakeKey = null;
+  let intakeInFlight = false;
+  const submitButton = form.querySelector('button[type="submit"]');
+  const newIntakeRequest = () => { intakeKey = null; };
+  form.addEventListener("input", newIntakeRequest);
+  form.addEventListener("click", event => {
+    if (event.target.closest(".triage-btn, .resource-chip")) newIntakeRequest();
+  });
+  document.getElementById("emergencyTypeSelect")?.addEventListener("change", newIntakeRequest);
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (intakeInFlight) return; // double click / Enter while the first submission is still running
     const patientName = document.getElementById("patientName").value.trim() || "Anonymous Patient";
     const patientAge = parseInt(document.getElementById("patientAge").value, 10) || 45;
     const notes = document.getElementById("emergencyNotes").value.trim();
@@ -547,6 +563,9 @@ function attachFormListeners() {
     };
 
     if (getAuthToken()) {
+      intakeKey ||= newIdempotencyKey();
+      intakeInFlight = true;
+      if (submitButton) submitButton.disabled = true;
       try {
         const response = await EmergenciesAPI.create({
           patient_name: patientName,
@@ -556,8 +575,9 @@ function attachFormListeners() {
            clinical_notes: notes,
            required_resources: resourceTypesForApi(state.customRequirements),
            required_specialist: state.customRequirements.specialist
-        });
+        }, intakeKey);
         if (response?.request_id) {
+          intakeKey = null; // this submission is done; the next one is a new case
           newRequest.requestId = response.request_id;
           state.selectedRequestId = response.request_id;
           state.dataSource = "backend";
@@ -570,6 +590,9 @@ function attachFormListeners() {
       } catch (error) {
         showNotification(`API registration failed: ${error.message}`, "urgent");
         return;
+      } finally {
+        intakeInFlight = false;
+        if (submitButton) submitButton.disabled = false;
       }
     }
 
@@ -586,6 +609,10 @@ function attachFormListeners() {
     recordActivity("REQUEST_CREATED", `Emergency ${newRequest.requestId} entered the standalone priority queue`, "critical");
     showNotification(`🚨 Emergency Registered: ${newRequest.requestId} (${newRequest.priorityName}) - Matching suitable hospitals...`, "urgent");
   });
+}
+
+function newIdempotencyKey() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 function resourceTypesForApi(requirements) {
@@ -1896,6 +1923,17 @@ function renderRoadsideHospitalRecommendation(ranked, analysis) {
 
   document.getElementById("btnRoadsidePreAlert")?.addEventListener("click", async () => {
     // 1-Click Pre-Alert ER: Creates an active emergency request, locks soft-reservation, and notifies hospital!
+    // A second click while the first pre-alert is still being sent would register the victim twice.
+    if (roadsidePreAlertInFlight) return;
+    roadsidePreAlertInFlight = true;
+    try {
+      await sendRoadsidePreAlert(topHospital, analysis);
+    } finally {
+      roadsidePreAlertInFlight = false;
+    }
+  });
+
+  async function sendRoadsidePreAlert(topHospital, analysis) {
     const newReqId = `REQ-${Math.floor(1000 + Math.random() * 9000)}`;
     const newRequest = {
       requestId: newReqId,
@@ -1921,7 +1959,7 @@ function renderRoadsideHospitalRecommendation(ranked, analysis) {
           clinical_notes: newRequest.notes,
           pickup_lat: state.roadside.currentLocation.lat,
           pickup_lng: state.roadside.currentLocation.lng
-        });
+        }, newIdempotencyKey());
         if (!response?.request_id) throw new Error("The emergency API did not return a request ID.");
         newRequest.requestId = response.request_id;
         await refreshWorkspaceData();
@@ -1934,10 +1972,10 @@ function renderRoadsideHospitalRecommendation(ranked, analysis) {
       state.emergencyQueue.sort(comparePriority);
     }
 
-    initiateReferralLock(topHospital, state.emergencyQueue.find(item => item.requestId === newRequest.requestId) || newRequest);
+    await initiateReferralLock(topHospital, state.emergencyQueue.find(item => item.requestId === newRequest.requestId) || newRequest);
     recordActivity("ROADSIDE_PREALERT", `Roadside pre-alert sent for ${newRequest.requestId}`, "critical");
     showNotification(`🚨 1-Click ER Pre-Alert Transmitted to ${topHospital.name}! Trauma scrub team alerted. Soft lock active!`, "urgent");
-  });
+  }
 
   document.getElementById("btnRoadsideDispatchEMS")?.addEventListener("click", async () => {
     const referral = state.lastAcceptedReferral;

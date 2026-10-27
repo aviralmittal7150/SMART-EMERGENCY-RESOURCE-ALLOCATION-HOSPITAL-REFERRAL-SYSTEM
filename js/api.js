@@ -95,7 +95,14 @@ export const HospitalsAPI = {
 export const EmergenciesAPI = {
   getAll(status)       { return apiFetch(`/emergencies${status ? `?status=${status}` : ''}`); },
   getById(id)          { return apiFetch(`/emergencies/${id}`); },
-  create(body)         { return apiFetch('/emergencies', { method: 'POST', body: JSON.stringify(body) }); },
+  // Reuse the same idempotencyKey when retrying one submission: the server then returns the original case.
+  create(body, idempotencyKey) {
+    return apiFetch('/emergencies', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}
+    });
+  },
   updateStatus(id, s)  { return apiFetch(`/emergencies/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: s }) }); },
   getAudit(id)         { return apiFetch(`/emergencies/${id}/audit`); }
 };
