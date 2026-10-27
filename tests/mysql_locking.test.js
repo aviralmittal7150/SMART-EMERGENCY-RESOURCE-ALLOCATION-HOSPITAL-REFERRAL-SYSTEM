@@ -364,4 +364,52 @@ if (skip) {
     assert.equal(active[0].acceptanceId, lock.acceptanceId);
     assert.ok(active[0].remainingSec >= 88 && active[0].remainingSec <= 90, `got ${active[0].remainingSec}`);
   });
+
+  // ── Listener failures after commit ────────────────────────────────────────
+  // Events fire only once the transaction is durable, so a throwing listener must not
+  // turn a committed operation into a reported failure (the caller would retry or give up).
+  async function withThrowingListener(event, fn, filter = () => true) {
+    const boom = payload => { if (filter(payload)) throw new Error(`${event} listener failed`); };
+    const originalError = console.error;
+    const logged = [];
+    console.error = (...args) => logged.push(args.join(' '));
+    engine.on(event, boom);
+    try {
+      return { result: await fn(), logged };
+    } finally {
+      engine.off(event, boom);
+      console.error = originalError;
+    }
+  }
+
+  test('a throwing listener after a committed accept still reports the allocation', async () => {
+    const id = await makeRequest();
+    const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
+    const { result, logged } = await withThrowingListener('allocation_committed', () => engine.commitAllocation(lock.acceptanceId));
+
+    assert.equal(result.status, 'ACCEPTED');
+    assert.equal(await requestStatus(id), 'ALLOCATED');
+    assert.deepEqual(await resource('H-A', 'ICU_BED'), { available: 0, locked: 0 });
+    assert.ok(logged.some(line => /listener failed after commit/.test(line)), 'the failure must be logged, not hidden');
+  });
+
+  test('a throwing audit listener does not fail an acquisition that committed', async () => {
+    const id = await makeRequest();
+    const { result } = await withThrowingListener('audit', () => engine.acquireSoftLock('H-A', id, ['ICU_BED']));
+
+    assert.ok(result.acceptanceId);
+    assert.deepEqual(await resource('H-A', 'ICU_BED'), { available: 1, locked: 1 });
+    assert.equal(await count("SELECT COUNT(*) n FROM HospitalAcceptance WHERE request_id = ? AND status = 'PENDING'", [id]), 1);
+  });
+
+  test('a throwing lock_acquired listener during failover still reports the rejection and next hospital', async () => {
+    const id = await makeRequest();
+    const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
+    const { result } = await withThrowingListener('lock_acquired', () => engine.rejectAndFailover(lock.acceptanceId, 'No capacity'));
+
+    assert.equal(result.status, 'REJECTED');
+    assert.equal(result.next_hospital_id, 'H-B');
+    assert.deepEqual(await resource('H-B', 'ICU_BED'), { available: 2, locked: 1 });
+    assert.equal(await requestStatus(id), 'MATCHING');
+  });
 }

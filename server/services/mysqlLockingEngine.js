@@ -59,7 +59,7 @@ export class MySqlLockingEngine extends EventEmitter {
         const result = await work(conn);
         await conn.commit();
         // Audit events are announced only once their transaction is durable.
-        conn.pendingAudits.forEach(entry => this.emit('audit', entry));
+        conn.pendingAudits.forEach(entry => this._notify('audit', entry));
         return result;
       } catch (err) {
         try { await conn.rollback(); } catch { /* connection may already be gone */ }
@@ -71,6 +71,18 @@ export class MySqlLockingEngine extends EventEmitter {
       } finally {
         conn.release();
       }
+    }
+  }
+
+  /**
+   * Announce an event for work that is already committed. A throwing listener is logged, never
+   * turned into a failure of an operation that happened (the caller would retry or give up on it).
+   */
+  _notify(event, payload) {
+    try {
+      this.emit(event, payload);
+    } catch (err) {
+      console.error(`[MYSQL-LOCK] '${event}' listener failed after commit:`, err.message);
     }
   }
 
@@ -102,7 +114,7 @@ export class MySqlLockingEngine extends EventEmitter {
   async acquireSoftLock(hospitalId, requestId, resourceTypes = ['ICU_BED']) {
     const types = this._normalizeTypes(resourceTypes);
     const lock = await this._tx(conn => this._acquire(conn, hospitalId, requestId, types));
-    this.emit('lock_acquired', this._publicLock(lock));
+    this._notify('lock_acquired', this._publicLock(lock));
     return lock;
   }
 
@@ -292,10 +304,10 @@ export class MySqlLockingEngine extends EventEmitter {
     });
 
     if (outcome.refused) {
-      this.emit('lock_released', { ...outcome.cancelled, status: 'CANCELLED', reason: outcome.refused });
+      this._notify('lock_released', { ...outcome.cancelled, status: 'CANCELLED', reason: outcome.refused });
       throw new LockError(outcome.refused);
     }
-    this.emit('allocation_committed', outcome.result);
+    this._notify('allocation_committed', outcome.result);
     return outcome.result;
   }
 
@@ -334,7 +346,7 @@ export class MySqlLockingEngine extends EventEmitter {
       acceptanceId, requestId: released.requestId, hospitalId: released.hospitalId, status: 'REJECTED',
       next_acceptance_id: next?.acceptanceId || null, next_hospital_id: next?.hospitalId || null
     };
-    this.emit('lock_released', result);
+    this._notify('lock_released', result);
     return result;
   }
 
@@ -372,7 +384,7 @@ export class MySqlLockingEngine extends EventEmitter {
     for (const candidate of candidates) {
       try {
         const lock = await this._tx(conn => this._acquire(conn, candidate.hospital_id, requestId, types));
-        this.emit('lock_acquired', this._publicLock(lock));
+        this._notify('lock_acquired', this._publicLock(lock));
         return lock;
       } catch (err) {
         if (!(err instanceof LockError)) throw err; // a competing request took it, or the case changed: try the next
@@ -405,7 +417,7 @@ export class MySqlLockingEngine extends EventEmitter {
     if (!outcome) return false;
 
     const next = await this._failover(outcome.requestId, outcome.types);
-    this.emit('lock_expired', {
+    this._notify('lock_expired', {
       acceptanceId, requestId: outcome.requestId, hospitalId: outcome.hospitalId,
       nextAcceptanceId: next?.acceptanceId || null, nextHospitalId: next?.hospitalId || null
     });
@@ -441,7 +453,7 @@ export class MySqlLockingEngine extends EventEmitter {
   /** Drop every pending referral for a request without failover. Used inside closeRequest and standalone. */
   async cancelPendingForRequest(requestId, reason = 'Request cancelled') {
     const cancelled = await this._tx(conn => this._cancelPending(conn, requestId, reason));
-    cancelled.forEach(item => this.emit('lock_released', { ...item, status: 'CANCELLED', reason }));
+    cancelled.forEach(item => this._notify('lock_released', { ...item, status: 'CANCELLED', reason }));
     return cancelled.map(item => item.acceptanceId);
   }
 
@@ -518,7 +530,7 @@ export class MySqlLockingEngine extends EventEmitter {
       });
       return { previous, unchanged: false, cancelled };
     });
-    outcome.cancelled.forEach(item => this.emit('lock_released', { ...item, status: 'CANCELLED', reason: `Request ${newStatus}` }));
+    outcome.cancelled.forEach(item => this._notify('lock_released', { ...item, status: 'CANCELLED', reason: `Request ${newStatus}` }));
     return {
       requestId, previous: outcome.previous, status: newStatus, unchanged: outcome.unchanged,
       cancelledLocks: outcome.cancelled.map(item => item.acceptanceId)

@@ -46,6 +46,7 @@ class LockingEngine extends EventEmitter {
       throw new Error(`Request ${requestId} already has an active referral lock.`);
     }
 
+    let lockRecord;
     try {
       for (const rType of normalizedTypes) {
         const resource = db.medicalResources.find(
@@ -82,7 +83,7 @@ class LockingEngine extends EventEmitter {
       const acceptanceId = `ACC-${uuidv4().slice(0, 8).toUpperCase()}`;
       const expiresAt = Date.now() + SOFT_LOCK_TTL_MS;
 
-      const lockRecord = {
+      lockRecord = {
         acceptanceId,
         requestId,
         hospitalId,
@@ -108,7 +109,8 @@ class LockingEngine extends EventEmitter {
       const countdownTimer = setInterval(() => {
         elapsed += 1;
         lockRecord.remainingSec = Math.max(0, 90 - elapsed);
-        this.emit('lock_tick', this._toPublicLock(lockRecord));
+        // A throw escaping this callback would crash the process and skip the expiry below.
+        this._afterApplied(`Tick for ${acceptanceId}`, () => this.emit('lock_tick', this._toPublicLock(lockRecord)));
 
         if (elapsed >= 90) {
           clearInterval(countdownTimer);
@@ -118,26 +120,6 @@ class LockingEngine extends EventEmitter {
 
       lockRecord.timerId = countdownTimer;
       this._activeLocks.set(acceptanceId, { ...lockRecord, releaseFns, lockedResources, countdownTimer });
-
-      // Audit
-      db.auditLog({
-        request_id: requestId,
-        hospital_id: hospitalId,
-        event_type: 'LOCK_ACQUIRED',
-        previous_state: 'WAITING',
-        new_state: 'PENDING_ACCEPTANCE',
-        actor_role: 'SYSTEM',
-        metadata: { acceptanceId, resourceIds: lockedResources.map(r => r.resource_id) }
-      });
-
-      db.persist?.();
-
-      // Release OS mutex (lock record stored, application-level lock maintained)
-      releaseFns.forEach(fn => fn());
-
-      this.emit('lock_acquired', this._toPublicLock(lockRecord));
-      return lockRecord;
-
     } catch (err) {
       // Release any acquired OS mutexes on partial failure
       releaseFns.forEach(fn => { try { fn(); } catch(_) {} });
@@ -151,6 +133,28 @@ class LockingEngine extends EventEmitter {
       db.persist?.();
       throw err;
     }
+
+    // The lock is registered and now owns the reserved capacity; only its own
+    // release (commit / reject / cancel / TTL) may give it back. Rolling back here
+    // would leave a live lock whose expiry later frees another request's bed.
+    // Release the OS mutexes; the application-level lock is maintained.
+    releaseFns.forEach(fn => fn());
+
+    const { acceptanceId } = lockRecord;
+    this._afterApplied(`Acquired ${acceptanceId}`, () => {
+      db.auditLog({
+        request_id: requestId,
+        hospital_id: hospitalId,
+        event_type: 'LOCK_ACQUIRED',
+        previous_state: 'WAITING',
+        new_state: 'PENDING_ACCEPTANCE',
+        actor_role: 'SYSTEM',
+        metadata: { acceptanceId, resourceIds: lockRecord.resourceIds }
+      });
+      db.persist?.();
+    });
+    this._afterApplied(`Acquired ${acceptanceId}`, () => this.emit('lock_acquired', this._toPublicLock(lockRecord)));
+    return lockRecord;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -226,17 +230,20 @@ class LockingEngine extends EventEmitter {
 
     this._activeLocks.delete(acceptanceId);
 
-    db.auditLog({
-      request_id: requestId,
-      hospital_id: hospitalId,
-      event_type: 'ALLOCATION_COMMITTED',
-      previous_state: 'PENDING_ACCEPTANCE',
-      new_state: 'ALLOCATED',
-      actor_role: 'HOSPITAL_DESK',
-      actor_id: actorId,
-      metadata: { acceptanceId, ambulance_id: ambulance?.ambulance_id || null }
+    // The allocation is applied; from here on a failure must not be reported as a failed accept.
+    this._afterApplied(`Committed ${acceptanceId}`, () => {
+      db.auditLog({
+        request_id: requestId,
+        hospital_id: hospitalId,
+        event_type: 'ALLOCATION_COMMITTED',
+        previous_state: 'PENDING_ACCEPTANCE',
+        new_state: 'ALLOCATED',
+        actor_role: 'HOSPITAL_DESK',
+        actor_id: actorId,
+        metadata: { acceptanceId, ambulance_id: ambulance?.ambulance_id || null }
+      });
+      db.persist?.();
     });
-    db.persist?.();
 
     const result = {
       acceptanceId,
@@ -245,7 +252,7 @@ class LockingEngine extends EventEmitter {
       status: 'ACCEPTED',
       ambulance_id: ambulance?.ambulance_id || null
     };
-    this.emit('allocation_committed', result);
+    this._afterApplied(`Committed ${acceptanceId}`, () => this.emit('allocation_committed', result));
     return result;
   }
 
@@ -276,17 +283,19 @@ class LockingEngine extends EventEmitter {
     this._activeLocks.delete(acceptanceId);
     const nextLock = await this._tryFailover(lockEntry);
 
-    db.auditLog({
-      request_id: lockEntry.requestId,
-      hospital_id: lockEntry.hospitalId,
-      event_type: 'LOCK_REJECTED_FAILOVER',
-      previous_state: 'PENDING_ACCEPTANCE',
-      new_state: 'MATCHING',
-      actor_role: 'HOSPITAL_DESK',
-      actor_id: actorId,
-      metadata: { acceptanceId, rejectionReason, nextAcceptanceId: nextLock?.acceptanceId || null }
+    this._afterApplied(`Rejected ${acceptanceId}`, () => {
+      db.auditLog({
+        request_id: lockEntry.requestId,
+        hospital_id: lockEntry.hospitalId,
+        event_type: 'LOCK_REJECTED_FAILOVER',
+        previous_state: 'PENDING_ACCEPTANCE',
+        new_state: 'MATCHING',
+        actor_role: 'HOSPITAL_DESK',
+        actor_id: actorId,
+        metadata: { acceptanceId, rejectionReason, nextAcceptanceId: nextLock?.acceptanceId || null }
+      });
+      db.persist?.();
     });
-    db.persist?.();
 
     const result = {
       acceptanceId,
@@ -296,7 +305,7 @@ class LockingEngine extends EventEmitter {
       next_acceptance_id: nextLock?.acceptanceId || null,
       next_hospital_id: nextLock?.hospitalId || null
     };
-    this.emit('lock_released', result);
+    this._afterApplied(`Rejected ${acceptanceId}`, () => this.emit('lock_released', result));
     return result;
   }
 
@@ -325,27 +334,29 @@ class LockingEngine extends EventEmitter {
 
     const nextLock = await this._tryFailover(lockRecord);
 
-    db.auditLog({
-      request_id: lockRecord.requestId,
-      hospital_id: lockRecord.hospitalId,
-      event_type: 'LOCK_TTL_EXPIRED_FAILOVER',
-      previous_state: 'PENDING_ACCEPTANCE',
-      new_state: 'MATCHING',
-      actor_role: 'SYSTEM',
-      metadata: {
-        acceptanceId: lockRecord.acceptanceId,
-        nextAcceptanceId: nextLock?.acceptanceId || null
-      }
+    this._afterApplied(`Expired ${lockRecord.acceptanceId}`, () => {
+      db.auditLog({
+        request_id: lockRecord.requestId,
+        hospital_id: lockRecord.hospitalId,
+        event_type: 'LOCK_TTL_EXPIRED_FAILOVER',
+        previous_state: 'PENDING_ACCEPTANCE',
+        new_state: 'MATCHING',
+        actor_role: 'SYSTEM',
+        metadata: {
+          acceptanceId: lockRecord.acceptanceId,
+          nextAcceptanceId: nextLock?.acceptanceId || null
+        }
+      });
+      db.persist?.();
     });
-    db.persist?.();
 
-    this.emit('lock_expired', {
+    this._afterApplied(`Expired ${lockRecord.acceptanceId}`, () => this.emit('lock_expired', {
       acceptanceId: lockRecord.acceptanceId,
       requestId:    lockRecord.requestId,
       hospitalId:   lockRecord.hospitalId,
       nextAcceptanceId: nextLock?.acceptanceId || null,
       nextHospitalId: nextLock?.hospitalId || null
-    });
+    }));
   }
 
   async expireLock(acceptanceId) {
@@ -472,7 +483,7 @@ class LockingEngine extends EventEmitter {
 
     // Capacity is already released and the lock removed. A failing audit write or
     // event listener must not abort the caller halfway, so report it loudly instead.
-    try {
+    this._afterApplied(`Cancelled ${entry.acceptanceId}`, () => {
       db.auditLog({
         request_id: entry.requestId,
         hospital_id: entry.hospitalId,
@@ -490,10 +501,20 @@ class LockingEngine extends EventEmitter {
         status: 'CANCELLED',
         reason
       });
-    } catch (err) {
-      console.error(`[LOCK] Cancelled ${entry.acceptanceId} but audit/notification failed:`, err.message);
-    }
+    });
     return true;
+  }
+
+  /**
+   * Run audit / persistence / notification work for a state change that is already
+   * applied. Failing here must neither undo nor misreport that change, so log it.
+   */
+  _afterApplied(label, step) {
+    try {
+      step();
+    } catch (err) {
+      console.error(`[LOCK] ${label} but audit/notification failed:`, err.message);
+    }
   }
 
   // The per-lock countdown counter lives on a different object than the stored entry,
