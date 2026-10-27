@@ -9,6 +9,7 @@ import express from 'express';
 import { db } from '../server/db/seed.js';
 import { lockingEngine } from '../server/services/lockingEngine.js';
 import { generateToken } from '../server/middleware/auth.js';
+import { getStore } from '../server/db/store.js';
 import emergenciesRoutes from '../server/routes/emergencies.js';
 import referralsRoutes from '../server/routes/referrals.js';
 import analyticsRoutes from '../server/routes/analytics.js';
@@ -293,6 +294,27 @@ test('an admin cannot move a case to MATCHING by hand: only placing a referral d
   assert.equal(requestOf(requestId).status, 'WAITING', 'a MATCHING case without a pending referral would be stranded');
   await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
 });
+
+test('a failing alert write after a committed accept does not report the accept as failed', () => withFleetRestored(async () => {
+  const requestId = await createCase();
+  const initiated = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: requestId, hospital_id: 'H-101' });
+  assert.equal(initiated.status, 201);
+
+  const store = getStore();
+  const original = store.createAlert;
+  store.createAlert = async () => { throw new Error('alert table unavailable'); };
+  let accepted;
+  try {
+    accepted = await call(`/api/v1/referrals/${initiated.body.acceptance_id}/accept`, tokens.desk101, 'POST');
+  } finally {
+    store.createAlert = original;
+  }
+
+  assert.equal(requestOf(requestId).status, 'ALLOCATED', 'precondition: the allocation committed');
+  assert.equal(accepted.status, 200, 'a committed allocation must be reported as accepted, or the desk retries / gives up');
+  assert.equal(accepted.body.status, 'ACCEPTED');
+  await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
+}));
 
 test('failover refuses a request that has already moved past matching', async () => {
   const requestId = await createCase();

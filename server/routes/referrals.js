@@ -92,14 +92,9 @@ router.post('/:acceptanceId/accept',
     }
 
     try {
+      // The hospital alert is recorded by the server's 'allocation_committed' listener, after the
+      // commit and outside this response: a failing alert write must not turn an accept into an error.
       const result = await store.commitReferral(req.params.acceptanceId, req.user.user_id);
-
-      await store.createAlert({
-        hospital_id: acceptance.hospital_id,
-        request_id:  acceptance.request_id,
-        alert_type:  'INCOMING_REFERRAL',
-        message:     `Referral ${acceptance.request_id} ACCEPTED by hospital desk. Resources atomically committed.`
-      });
 
       res.json({
         success: true,
