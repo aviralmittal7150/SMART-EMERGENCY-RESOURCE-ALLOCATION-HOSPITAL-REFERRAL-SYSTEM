@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { openTestDatabase, mysqlServerEnv, testConfig } from './helpers/mysqlTestDb.js';
+import { createPool } from '../server/db/pool.js';
+import { MySqlStore } from '../server/db/mysqlStore.js';
 
 const SHARED_PORT = 4127;
 const RESTART_PORT = 4128;
@@ -307,6 +309,62 @@ if (handle.skip) {
     assert.equal((await post({ patient_name: 'Fictional', clinical_notes: 'n'.repeat(20001) })).status, 400);
     // The largest accepted notes (20 000 three-byte characters) still fit the TEXT column.
     assert.equal((await post({ patient_name: 'Fictional', clinical_notes: '€'.repeat(20000) })).status, 201);
+  });
+
+  // ── Idempotent creation ───────────────────────────────────────────────────
+  test('concurrent creates with one Idempotency-Key register exactly one case; a reused key with another body is refused', async () => {
+    const post = (key, name) => fetch(`http://127.0.0.1:${SHARED_PORT}/api/v1/emergencies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.paramedic}`, 'Idempotency-Key': key },
+      body: JSON.stringify({ patient_name: name, age: 33, emergency_type: 'RESPIRATORY', triage_priority: 2 })
+    }).then(async r => ({ status: r.status, replayed: r.headers.get('idempotent-replayed'), body: await r.json() }));
+
+    const results = await Promise.all(Array.from({ length: 8 }, () => post('mysql-double-click', 'Fictional Idempotent MySQL')));
+    assert.ok(results.every(r => r.status === 201), results.map(r => `${r.status}:${r.body.error ?? ''}`).join(','));
+    assert.equal(new Set(results.map(r => r.body.request_id)).size, 1);
+    assert.equal(results.filter(r => r.replayed === 'true').length, 7);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM Patient WHERE full_name = 'Fictional Idempotent MySQL'"), 1);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM EmergencyHistory WHERE request_id = ? AND event_type = 'REQUEST_CREATED'", [results[0].body.request_id]), 1);
+
+    const conflicting = await post('mysql-double-click', 'Fictional Someone Else');
+    assert.equal(conflicting.status, 422);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM Patient WHERE full_name = 'Fictional Someone Else'"), 0);
+  });
+
+  test('a failed create does not burn its Idempotency-Key: the retry creates the case', async () => {
+    await sql('RENAME TABLE EmergencyHistory TO EmergencyHistory_offline');
+    let failed;
+    try {
+      failed = await fetch(`http://127.0.0.1:${SHARED_PORT}/api/v1/emergencies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.paramedic}`, 'Idempotency-Key': 'retry-after-failure' },
+        body: JSON.stringify({ patient_name: 'Fictional Retry After Failure', age: 30, emergency_type: 'GENERAL', triage_priority: 3 })
+      });
+    } finally {
+      await sql('RENAME TABLE EmergencyHistory_offline TO EmergencyHistory');
+    }
+    assert.equal(failed.status, 500);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM IdempotencyKey WHERE idem_key = 'retry-after-failure'"), 0, 'the key rolled back with the case');
+
+    const retried = await fetch(`http://127.0.0.1:${SHARED_PORT}/api/v1/emergencies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.paramedic}`, 'Idempotency-Key': 'retry-after-failure' },
+      body: JSON.stringify({ patient_name: 'Fictional Retry After Failure', age: 30, emergency_type: 'GENERAL', triage_priority: 3 })
+    });
+    assert.equal(retried.status, 201);
+    assert.equal(retried.headers.get('idempotent-replayed'), null);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM Patient WHERE full_name = 'Fictional Retry After Failure'"), 1);
+  });
+
+  test('idempotency keys older than a day are purged', async () => {
+    const store = new MySqlStore({ pool: createPool({ ...testConfig, connectionLimit: 2 }) });
+    try {
+      await sql("INSERT INTO IdempotencyKey (actor_id, endpoint, idem_key, request_hash, resource_id, created_at) VALUES ('U', 'E', 'old', REPEAT('a', 64), 'REQ-OLD', NOW() - INTERVAL 25 HOUR), ('U', 'E', 'new', REPEAT('a', 64), 'REQ-NEW', NOW())");
+      assert.equal(await store.purgeExpiredIdempotencyKeys(), 1);
+      assert.deepEqual((await sql("SELECT idem_key FROM IdempotencyKey WHERE actor_id = 'U'")).map(r => r.idem_key), ['new']);
+    } finally {
+      await store.close();
+    }
   });
 
   // ── Authorization boundaries (MySQL mode) ─────────────────────────────────

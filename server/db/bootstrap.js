@@ -12,7 +12,7 @@ import { createPool } from './pool.js';
 import { configureStore } from './store.js';
 import { MemoryStore } from './memoryStore.js';
 import { MySqlStore } from './mysqlStore.js';
-import { SCHEMA_TABLES } from './init.js';
+import { SCHEMA_TABLES, MIGRATED_TABLES } from './init.js';
 
 /** Returns a list of human-readable problems; empty means the schema fits this version of the code. */
 export async function checkSchema(pool) {
@@ -20,10 +20,12 @@ export async function checkSchema(pool) {
   const [tables] = await pool.query('SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()');
   const present = new Set(tables.map(t => t.name));
   const missing = SCHEMA_TABLES.filter(t => !present.has(t));
-  if (missing.length) {
+  const missingCore = missing.filter(t => !MIGRATED_TABLES[t]);
+  if (missingCore.length) {
     problems.push(`missing tables: ${missing.join(', ')} (run "node server/db/init.js" on an empty database)`);
     return problems; // column checks would only add noise
   }
+  for (const table of missing) problems.push(`missing table ${table} (run ${MIGRATED_TABLES[table]})`);
 
   const [columns] = await pool.query(
     `SELECT table_name AS t, column_name AS c, column_type AS type, is_nullable AS nullable
@@ -61,7 +63,7 @@ export async function bootstrapStore(env = process.env, { log = console } = {}) 
     await pool.query('SELECT 1');
     const problems = await checkSchema(pool);
     if (problems.length) {
-      throw new Error(`Schema is out of date: ${problems.join('; ')}. See server/db/migrations/001_referral_lifecycle.sql.`);
+      throw new Error(`Schema is out of date: ${problems.join('; ')}. See server/db/migrations/ (additive, run manually, in order).`);
     }
   } catch (err) {
     await pool.end().catch(() => {});

@@ -19,6 +19,7 @@ export class MemoryStore extends EventEmitter {
     this.mode = 'memory';
     this.db = db;
     this.lockingEngine = lockingEngine;
+    this._idempotencyKeys = new Map(); // `${actor}\0${endpoint}\0${key}` -> { fingerprint, request_id, patient_id }
     db.on('audit', entry => this.emit('audit', entry));
   }
 
@@ -237,7 +238,23 @@ export class MemoryStore extends EventEmitter {
       .sort((a, b) => new Date(a.event_time) - new Date(b.event_time));
   }
 
-  async createRequest({ patient, request }, actor) {
+  /**
+   * idempotency: { key, endpoint, fingerprint } or null. A repeated key with the same fingerprint returns
+   * the case it created ({ ..., replayed: true }); with a different fingerprint it is refused (422).
+   * Check and insert run without an await in between, so concurrent duplicates cannot both create.
+   */
+  async createRequest({ patient, request }, actor, { idempotency = null } = {}) {
+    const idemKey = idempotency && `${actor.id}\u0000${idempotency.endpoint}\u0000${idempotency.key}`;
+    if (idemKey) {
+      const previous = this._idempotencyKeys.get(idemKey);
+      if (previous) {
+        if (previous.fingerprint !== idempotency.fingerprint) {
+          throw new StoreError(422, 'This Idempotency-Key was already used for a different request.');
+        }
+        return { request_id: previous.request_id, patient_id: previous.patient_id, status: 'WAITING', replayed: true };
+      }
+    }
+
     const patientId = `PAT-${uuidv4().slice(0, 6).toUpperCase()}`;
     let requestId;
     do {
@@ -272,7 +289,10 @@ export class MemoryStore extends EventEmitter {
         required_specialist: request.required_specialist
       }
     });
-    return { request_id: requestId, patient_id: patientId, status: 'WAITING' };
+    if (idemKey) {
+      this._idempotencyKeys.set(idemKey, { fingerprint: idempotency.fingerprint, request_id: requestId, patient_id: patientId });
+    }
+    return { request_id: requestId, patient_id: patientId, status: 'WAITING', replayed: false };
   }
 
   async transitionRequestStatus(requestId, newStatus, actor) {

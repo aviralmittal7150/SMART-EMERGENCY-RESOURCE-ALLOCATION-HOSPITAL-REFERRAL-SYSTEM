@@ -64,7 +64,8 @@ app.use(helmet({
 app.use(cors({
   origin: ['http://localhost:3000', 'http://127.0.0.1:3000', FRONTEND_URL],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
+  exposedHeaders: ['Idempotent-Replayed'],
   credentials: true
 }));
 

@@ -25,6 +25,9 @@ const DOCTOR_COLUMNS = `d.doctor_id, d.hospital_id, d.full_name, d.specializatio
   TIME_FORMAT(d.shift_start, '%H:%i') AS shift_start, TIME_FORMAT(d.shift_end, '%H:%i') AS shift_end,
   d.created_at, COALESCE(h.hospital_name, 'Unknown') AS hospital_name`;
 
+/** Internal signal: the Idempotency-Key already exists, so the create must replay instead of insert. */
+class IdempotentReplay extends Error {}
+
 function mapRequest(row) {
   if (!row) return null;
   let types = row.required_resources;
@@ -48,9 +51,14 @@ export class MySqlStore extends EventEmitter {
   }
 
   /** Start the TTL sweeper (persisted lock expiry; replaces the in-memory timers). */
-  startBackgroundWorkers({ sweepIntervalMs = 5000 } = {}) {
+  startBackgroundWorkers({ sweepIntervalMs = 5000, purgeIntervalMs = 3_600_000 } = {}) {
     this._stopSweeper?.();
-    this._stopSweeper = this.lockingEngine.startExpirySweeper(sweepIntervalMs);
+    const stopExpiry = this.lockingEngine.startExpirySweeper(sweepIntervalMs);
+    const purge = setInterval(() => {
+      this.purgeExpiredIdempotencyKeys().catch(err => console.error('[MYSQL] Idempotency key purge failed:', err.message));
+    }, purgeIntervalMs);
+    purge.unref?.();
+    this._stopSweeper = () => { stopExpiry(); clearInterval(purge); };
   }
 
   /** Cheap reachability probe for /health. Throws if the database cannot be queried. */
@@ -325,7 +333,12 @@ export class MySqlStore extends EventEmitter {
     return this._rows('SELECT * FROM EmergencyHistory WHERE request_id = ? ORDER BY event_time, history_id', [requestId]);
   }
 
-  async createRequest({ patient, request }, actor) {
+  /**
+   * idempotency: { key, endpoint, fingerprint } or null. The key row is inserted FIRST, in the same
+   * transaction as the case: a concurrent duplicate blocks on the primary key until this commits, then
+   * fails with a duplicate key and replays the original (or proceeds, if this one rolled back).
+   */
+  async createRequest({ patient, request }, actor, { idempotency = null } = {}) {
     for (let attempt = 0; ; attempt += 1) {
       const patientId = `PAT-${uuidv4().slice(0, 6).toUpperCase()}`;
       // Four digits keep the familiar REQ-#### format; widen after repeated collisions.
@@ -334,6 +347,17 @@ export class MySqlStore extends EventEmitter {
         : `REQ-${Math.floor(100000 + Math.random() * 900000)}`;
       try {
         return await this._guard(() => this._tx(async conn => {
+          if (idempotency) {
+            try {
+              await conn.query(
+                'INSERT INTO IdempotencyKey (actor_id, endpoint, idem_key, request_hash, resource_id) VALUES (?, ?, ?, ?, ?)',
+                [String(actor.id ?? ''), idempotency.endpoint, idempotency.key, idempotency.fingerprint, requestId]
+              );
+            } catch (err) {
+              if (err.errno === ER_DUP_ENTRY) throw new IdempotentReplay();
+              throw err;
+            }
+          }
           await conn.query(
             `INSERT INTO Patient (patient_id, full_name, age, gender, emergency_type, triage_priority, contact_phone)
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -357,13 +381,33 @@ export class MySqlStore extends EventEmitter {
               required_specialist: request.required_specialist
             }
           });
-          return { request_id: requestId, patient_id: patientId, status: 'WAITING' };
+          return { request_id: requestId, patient_id: patientId, status: 'WAITING', replayed: false };
         }));
       } catch (err) {
+        if (err instanceof IdempotentReplay) return this._replayCreate(actor, idempotency);
         if (err.errno === ER_DUP_ENTRY && attempt < 40) continue; // id collision: nothing was committed
         throw err;
       }
     }
+  }
+
+  async _replayCreate(actor, idempotency) {
+    const record = await this._row(
+      'SELECT request_hash, resource_id FROM IdempotencyKey WHERE actor_id = ? AND endpoint = ? AND idem_key = ?',
+      [String(actor.id ?? ''), idempotency.endpoint, idempotency.key]
+    );
+    if (!record) throw new StoreError(409, 'A request with this Idempotency-Key is still in progress. Please retry.');
+    if (record.request_hash !== idempotency.fingerprint) {
+      throw new StoreError(422, 'This Idempotency-Key was already used for a different request.');
+    }
+    const created = await this._row('SELECT patient_id FROM EmergencyRequest WHERE request_id = ?', [record.resource_id]);
+    return { request_id: record.resource_id, patient_id: created?.patient_id ?? null, status: 'WAITING', replayed: true };
+  }
+
+  /** Idempotency keys only need to outlive client retries; drop them after a day. */
+  async purgeExpiredIdempotencyKeys(maxAgeHours = 24) {
+    const [result] = await this.pool.query('DELETE FROM IdempotencyKey WHERE created_at < NOW() - INTERVAL ? HOUR', [maxAgeHours]);
+    return result.affectedRows;
   }
 
   async transitionRequestStatus(requestId, newStatus, actor) {

@@ -16,7 +16,10 @@ import { db as demoData } from './seed.js';
 const SCHEMA_PATH = fileURLToPath(new URL('./schema.sql', import.meta.url));
 
 export const SCHEMA_TABLES = ['Hospital', 'Doctor', 'MedicalResource', 'Patient', 'EmergencyRequest',
-  'HospitalAcceptance', 'ResourceAllocation', 'Ambulance', 'EmergencyHistory', 'Alert', 'SystemUser'];
+  'HospitalAcceptance', 'ResourceAllocation', 'Ambulance', 'EmergencyHistory', 'Alert', 'SystemUser', 'IdempotencyKey'];
+
+/** Tables added by a later, additive migration: a database missing only these can be upgraded in place. */
+export const MIGRATED_TABLES = { IdempotencyKey: 'server/db/migrations/002_idempotency_keys.sql' };
 
 /** Open a dedicated connection that may run the multi-statement schema file. */
 export function connectForInit(mysqlConfig) {

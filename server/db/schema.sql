@@ -2,9 +2,9 @@
 -- SMART EMERGENCY RESOURCE ALLOCATION & HOSPITAL REFERRAL SYSTEM
 -- MySQL Schema — Phase 2 DBMS Layer
 -- 10 Normalized Tables with Foreign Keys, Indexes & ACID Support
--- NOTE: Reference schema only. The running application currently uses the
--- in-memory store (server/db/seed.js); this schema has not been verified
--- against a live MySQL server.
+-- Used by the application in MySQL mode (DB_USE_MEMORY=false) via `node server/db/init.js`,
+-- and loaded against a real MySQL server by the tests/mysql_*.test.js suites and CI.
+-- Existing databases are upgraded with the additive scripts in server/db/migrations/.
 -- ============================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
@@ -221,6 +221,22 @@ CREATE TABLE IF NOT EXISTS SystemUser (
   created_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (hospital_id) REFERENCES Hospital(hospital_id) ON DELETE SET NULL,
   INDEX idx_role (role)
+);
+
+-- ─────────────────────────────────────────────────────────────
+-- Table 12: IdempotencyKey
+-- One row per (user, endpoint, Idempotency-Key), written in the same transaction as the
+-- operation it guards, so a retried request replays the original result instead of repeating it.
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS IdempotencyKey (
+  actor_id           VARCHAR(80)  NOT NULL,
+  endpoint           VARCHAR(60)  NOT NULL,
+  idem_key           VARCHAR(100) NOT NULL,
+  request_hash       CHAR(64)     NOT NULL COMMENT 'SHA-256 of the validated request, to detect a key reused for a different request',
+  resource_id        VARCHAR(30)  NOT NULL COMMENT 'What the original request created (e.g. the request_id)',
+  created_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (actor_id, endpoint, idem_key),
+  INDEX idx_created (created_at)
 );
 
 SET FOREIGN_KEY_CHECKS = 1;

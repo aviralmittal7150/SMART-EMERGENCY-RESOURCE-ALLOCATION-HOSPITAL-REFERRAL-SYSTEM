@@ -1,5 +1,6 @@
-// The additive migration (server/db/migrations/001_referral_lifecycle.sql) tested for real on MySQL:
-//   old schema  ->  start-up check rejects it  ->  migration  ->  check passes
+// The additive migrations (server/db/migrations/001_referral_lifecycle.sql, 002_idempotency_keys.sql)
+// tested for real on MySQL:
+//   old schema  ->  start-up check rejects it  ->  001 + 002  ->  check passes
 //   -> structure identical to a freshly created schema, existing data untouched, engine works on it.
 // Runs only against the dedicated *_test database; skipped (not failed) when it is not configured,
 // and a failure in CI (REQUIRE_MYSQL_TESTS=true). All data is fictional.
@@ -14,6 +15,8 @@ import { SCHEMA_TABLES, initializeSchema, seedDemoData } from '../server/db/init
 import { MySqlLockingEngine } from '../server/services/mysqlLockingEngine.js';
 
 const read = relative => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
+const MIGRATION_002 = '../server/db/migrations/002_idempotency_keys.sql';
+const IDEMPOTENCY_MISSING = 'missing table IdempotencyKey (run server/db/migrations/002_idempotency_keys.sql)';
 const handle = await openTestDatabase();
 
 if (handle.skip) {
@@ -105,6 +108,9 @@ if (handle.skip) {
 
     // 4. Apply the real migration file.
     await admin.query(read('../server/db/migrations/001_referral_lifecycle.sql'));
+    assert.deepEqual(await checkSchema(pool), [IDEMPOTENCY_MISSING], 'after 001 only the 002 table is missing, and it is named');
+    await admin.query(read(MIGRATION_002));
+    await admin.query(read(MIGRATION_002)); // 002 is re-runnable
     assert.deepEqual(await checkSchema(pool), [], 'the migrated schema passes the start-up check');
 
     // 5. An upgraded database is structurally identical to a fresh one.
@@ -172,7 +178,7 @@ if (handle.skip) {
     });
     assert.deepEqual(await structure(), migrated, 'the failed re-run altered nothing');
     assert.deepEqual(await rowCounts(), counts);
-    assert.deepEqual(await checkSchema(pool), []);
+    assert.deepEqual(await checkSchema(pool), [IDEMPOTENCY_MISSING]);
 
     // The same on a database created from the current schema.sql.
     await dropAll();
@@ -180,6 +186,8 @@ if (handle.skip) {
     const fresh = await structure();
     await assert.rejects(admin.query(read('../server/db/migrations/001_referral_lifecycle.sql')), /Duplicate column name/);
     assert.deepEqual(await structure(), fresh, 'the migration refused to touch an up-to-date schema');
+    await admin.query(read(MIGRATION_002));
+    assert.deepEqual(await structure(), fresh, '002 is a no-op on an up-to-date schema');
   });
 
   test('a failure midway leaves the earlier statements applied, is reported precisely, and can be completed', async () => {
@@ -197,8 +205,9 @@ if (handle.skip) {
 
     // DDL is not transactional: statements 1 and 2 stayed applied. The start-up check names exactly what is
     // still missing, so an operator can finish by running only the remaining statements.
-    assert.deepEqual(await checkSchema(pool), ['EmergencyHistory.request_id must allow NULL']);
+    assert.deepEqual(await checkSchema(pool), [IDEMPOTENCY_MISSING, 'EmergencyHistory.request_id must allow NULL']);
     for (const statement of statements.slice(3)) await admin.query(statement);
+    await admin.query(read(MIGRATION_002));
     assert.deepEqual(await checkSchema(pool), []);
     assert.deepEqual(await rowCounts(), counts, 'no data was lost along the way');
 
