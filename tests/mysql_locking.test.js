@@ -365,6 +365,69 @@ if (skip) {
     assert.ok(active[0].remainingSec >= 88 && active[0].remainingSec <= 90, `got ${active[0].remainingSec}`);
   });
 
+  // ── Failover after a committed rejection / expiry ─────────────────────────
+  // The rejection commits first and failover runs afterwards, in its own transactions. Whatever happens
+  // in between (a crash, a lost connection, a competing referral) must leave a valid, recoverable state.
+  test('a failover that dies after the rejection committed leaves the case re-queued, not stuck in MATCHING', async () => {
+    const id = await makeRequest();
+    const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
+    const original = engine._failover;
+    engine._failover = async () => { throw new Error('connection lost'); };
+    const originalError = console.error;
+    console.error = () => {};
+    let result;
+    try {
+      result = await engine.rejectAndFailover(lock.acceptanceId, 'No capacity');
+    } finally {
+      engine._failover = original;
+      console.error = originalError;
+    }
+
+    assert.equal(result.status, 'REJECTED', 'the rejection is committed, so it must be reported as such');
+    assert.equal(result.next_acceptance_id, null);
+    assert.equal(await requestStatus(id), 'WAITING', 'no pending referral, so the case is back in the queue');
+    assert.deepEqual(await resource('H-A', 'ICU_BED'), { available: 1, locked: 0 });
+  });
+
+  test('a referral placed while failover is running is not overwritten back to WAITING', async () => {
+    const id = await makeRequest();
+    const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
+    const original = engine._failover;
+    // A paramedic re-initiates at H-B in the window between the rejection commit and the failover.
+    engine._failover = async (...args) => {
+      await engine.acquireSoftLock('H-B', id, ['ICU_BED']);
+      return original.apply(engine, args);
+    };
+    try {
+      await engine.rejectAndFailover(lock.acceptanceId, 'No capacity');
+    } finally {
+      engine._failover = original;
+    }
+
+    assert.equal(await count("SELECT COUNT(*) n FROM HospitalAcceptance WHERE request_id = ? AND status = 'PENDING'", [id]), 1);
+    assert.equal(await requestStatus(id), 'MATCHING', 'a case with a pending referral must be MATCHING');
+  });
+
+  test('an expiry whose failover dies leaves the case re-queued, and the sweeper still counts it', async () => {
+    const id = await makeRequest();
+    const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
+    await admin.query('UPDATE HospitalAcceptance SET lock_expires_at = NOW() - INTERVAL 5 SECOND WHERE acceptance_id = ?', [lock.acceptanceId]);
+    const original = engine._failover;
+    engine._failover = async () => { throw new Error('connection lost'); };
+    const originalError = console.error;
+    console.error = () => {};
+    let expired;
+    try {
+      expired = await engine.expireStaleLocks();
+    } finally {
+      engine._failover = original;
+      console.error = originalError;
+    }
+    assert.equal(expired, 1);
+    assert.equal(await requestStatus(id), 'WAITING');
+    assert.equal((await one('SELECT status FROM HospitalAcceptance WHERE acceptance_id = ?', [lock.acceptanceId])).status, 'EXPIRED');
+  });
+
   // ── Listener failures after commit ────────────────────────────────────────
   // Events fire only once the transaction is durable, so a throwing listener must not
   // turn a committed operation into a reported failure (the caller would retry or give up).

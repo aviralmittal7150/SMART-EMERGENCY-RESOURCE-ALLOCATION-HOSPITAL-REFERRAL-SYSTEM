@@ -1,10 +1,8 @@
 // server/services/mysqlLockingEngine.js
 // MySQL-backed referral lock lifecycle (InnoDB transactions + SELECT ... FOR UPDATE).
 //
-// This is the database counterpart of services/lockingEngine.js. It is NOT yet wired into the
-// HTTP routes: those still read hospitals, doctors and requests from the in-memory store, so
-// the application as a whole still runs on that store. This module is verified by
-// tests/mysql_locking.test.js against a real MySQL server.
+// This is the database counterpart of services/lockingEngine.js, used by server/db/mysqlStore.js
+// when DB_USE_MEMORY=false. It is verified by tests/mysql_locking.test.js against a real MySQL server.
 //
 // Mapping of the OS/DBMS concepts:
 //   per-request mutex      -> SELECT ... FOR UPDATE on the EmergencyRequest row
@@ -333,6 +331,7 @@ export class MySqlLockingEngine extends EventEmitter {
         "UPDATE HospitalAcceptance SET status = 'REJECTED', rejection_reason = ?, responded_at = NOW() WHERE acceptance_id = ?",
         [rejectionReason, acceptanceId]
       );
+      await this._requeue(conn, ctx.requestId);
       await this._audit(conn, {
         request_id: ctx.requestId, hospital_id: ctx.hospitalId, event_type: 'LOCK_REJECTED',
         previous_state: 'PENDING_ACCEPTANCE', new_state: 'REJECTED', actor_role: 'HOSPITAL_DESK', actor_id: actorId,
@@ -341,13 +340,33 @@ export class MySqlLockingEngine extends EventEmitter {
       return { requestId: ctx.requestId, hospitalId: ctx.hospitalId, types };
     });
 
-    const next = await this._failover(released.requestId, released.types);
+    const next = await this._failoverAfterCommit(released.requestId, released.types);
     const result = {
       acceptanceId, requestId: released.requestId, hospitalId: released.hospitalId, status: 'REJECTED',
       next_acceptance_id: next?.acceptanceId || null, next_hospital_id: next?.hospitalId || null
     };
     this._notify('lock_released', result);
     return result;
+  }
+
+  /**
+   * Put a case whose pending referral just ended back in the queue, in the same transaction that ended
+   * it (the request row is already locked). Failover runs after that commit, so if it never happens
+   * (crash, lost connection) the case is WAITING and visible, not stuck in MATCHING with no referral.
+   * Only _acquire moves a case to MATCHING. A terminal or allocated case is left untouched.
+   */
+  async _requeue(conn, requestId) {
+    await conn.query("UPDATE EmergencyRequest SET status = 'WAITING' WHERE request_id = ? AND status = 'MATCHING'", [requestId]);
+  }
+
+  /** Failover for work that is already committed: a failure is logged and reported as "no next hospital". */
+  async _failoverAfterCommit(requestId, types) {
+    try {
+      return await this._failover(requestId, types);
+    } catch (err) {
+      console.error(`[MYSQL-LOCK] Failover for ${requestId} failed after commit; the case stays queued:`, err.message);
+      return null;
+    }
   }
 
   /**
@@ -390,10 +409,8 @@ export class MySqlLockingEngine extends EventEmitter {
         if (!(err instanceof LockError)) throw err; // a competing request took it, or the case changed: try the next
       }
     }
-    // Nobody can take it: back to the queue, unless the case has since been cancelled/completed.
-    await this.pool.query(
-      "UPDATE EmergencyRequest SET status = 'WAITING' WHERE request_id = ? AND status IN ('NEW', 'WAITING', 'MATCHING')", [requestId]
-    );
+    // Nobody can take it. The case is already WAITING (see _requeue), or MATCHING because a referral was
+    // placed meanwhile; either way it is correct, so it is not overwritten here.
     return null;
   }
 
@@ -408,6 +425,7 @@ export class MySqlLockingEngine extends EventEmitter {
         "UPDATE HospitalAcceptance SET status = 'EXPIRED', responded_at = NOW(), response_time_sec = ? WHERE acceptance_id = ?",
         [SOFT_LOCK_TTL_SEC, acceptanceId]
       );
+      await this._requeue(conn, ctx.requestId);
       await this._audit(conn, {
         request_id: ctx.requestId, hospital_id: ctx.hospitalId, event_type: 'LOCK_TTL_EXPIRED_FAILOVER',
         previous_state: 'PENDING_ACCEPTANCE', new_state: 'EXPIRED', metadata: { acceptanceId }
@@ -416,7 +434,7 @@ export class MySqlLockingEngine extends EventEmitter {
     });
     if (!outcome) return false;
 
-    const next = await this._failover(outcome.requestId, outcome.types);
+    const next = await this._failoverAfterCommit(outcome.requestId, outcome.types);
     this._notify('lock_expired', {
       acceptanceId, requestId: outcome.requestId, hospitalId: outcome.hospitalId,
       nextAcceptanceId: next?.acceptanceId || null, nextHospitalId: next?.hospitalId || null
