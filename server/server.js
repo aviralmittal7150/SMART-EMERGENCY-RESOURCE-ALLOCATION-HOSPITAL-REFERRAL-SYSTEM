@@ -181,7 +181,11 @@ io.on('connection', async (socket) => {
     socket.join(`hospital:${hospitalId}`);
     console.log(`[WS] ${socket.id} joined room hospital:${hospitalId}`);
   }
-  socket.join('command_center'); // All connections get command center updates
+  // The command-center stream carries the audit trail (patient details) and every referral in the
+  // network, so it follows the same scoping as the REST API: admins only. Desks get their own
+  // hospital room above; everyone authenticated gets the aggregate KPIs.
+  const role = socket.user?.role;
+  if (role === 'ADMIN') socket.join('command_center');
 
   // Client requests latest KPIs
   socket.on('request:kpis', async () => {
@@ -192,10 +196,12 @@ io.on('connection', async (socket) => {
     }
   });
 
-  // Client requests active locks
+  // Client requests active locks (scoped like GET /referrals/active: admins all, desks their own, nobody else)
   socket.on('request:active_locks', async () => {
+    if (role !== 'ADMIN' && role !== 'HOSPITAL_DESK') return;
     try {
-      socket.emit('locks:update', await store.getActiveLocks());
+      const locks = await store.getActiveLocks();
+      socket.emit('locks:update', role === 'ADMIN' ? locks : locks.filter(lock => lock.hospitalId === hospitalId));
     } catch (err) {
       console.error('[WS] Could not list locks:', err.message);
     }
@@ -297,7 +303,7 @@ store.on('lock_cleanup', (acceptance) => {
 async function broadcastKPIs() {
   if (io.engine.clientsCount === 0) return; // nobody is listening: skip the work (and the DB query)
   try {
-    io.to('command_center').emit('kpis:update', await store.getKpis());
+    io.emit('kpis:update', await store.getKpis()); // aggregate counts only: every authenticated client
   } catch (err) {
     console.error('[KPI] Broadcast failed:', err.message);
   }

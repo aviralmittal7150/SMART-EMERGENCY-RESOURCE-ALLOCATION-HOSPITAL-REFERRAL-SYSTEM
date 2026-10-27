@@ -69,3 +69,63 @@ test('sockets need a valid token; valid ones get the snapshot and answer request
   assert.equal(expired.connected, false);
   assert.match(expired.error, /Invalid or expired/);
 });
+
+test('real-time events follow the same scoping as the REST API: case details reach admins and the referred hospital only', async t => {
+  const port = 4141;
+  const base = `http://127.0.0.1:${port}`;
+  const server = spawn(process.execPath, ['server/server.js'], {
+    cwd: process.cwd(),
+    env: { ...process.env, PORT: String(port), DB_USE_MEMORY: 'true', JWT_SECRET: 'socket-scope-test-secret' },
+    stdio: 'ignore'
+  });
+  t.after(async () => {
+    if (server.exitCode === null) { server.kill('SIGTERM'); await once(server, 'exit'); }
+  });
+  for (let i = 0; i < 60; i += 1) {
+    try { if ((await fetch(`${base}/health`)).ok) break; } catch { /* starting */ }
+    await sleep(150);
+  }
+  const call = async (path, token, body) => (await fetch(`${base}${path}`, {
+    method: body ? 'POST' : 'GET',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: body && JSON.stringify(body)
+  })).json();
+  const login = async (username, password) => (await call('/api/v1/auth/login', null, { username, password })).token;
+  const [admin, paramedic, desk101, desk102] = await Promise.all([
+    login('admin', 'admin123'), login('UNIT-402', 'paramedic123'), login('apex_desk', 'hospital123'), login('stjude_desk', 'hospital123')
+  ]);
+  const sockets = {
+    admin: await connectSocket(base, admin),
+    paramedic: await connectSocket(base, paramedic),
+    desk101: await connectSocket(base, desk101),
+    desk102: await connectSocket(base, desk102)
+  };
+  for (const s of Object.values(sockets)) assert.ok(await s.waitFor(x => x.has('system:snapshot')));
+
+  const created = await call('/api/v1/emergencies', paramedic, {
+    patient_name: 'Fictional Socket Patient', age: 40, emergency_type: 'CARDIAC', triage_priority: 1
+  });
+  await call('/api/v1/referrals/initiate', paramedic, { request_id: created.request_id, hospital_id: 'H-101' });
+
+  const leaked = s => s.events.some(e => JSON.stringify(e.payload ?? '').includes('Fictional Socket Patient'));
+  const lockEvent = s => s.events.some(e => e.name === 'lock:acquired');
+  assert.ok(await sockets.admin.waitFor(s => leaked(s) && lockEvent(s)), 'the admin console receives the audit trail and lock events');
+  assert.ok(await sockets.desk101.waitFor(s => s.has('referral:incoming')), 'the referred hospital is alerted');
+  await Promise.all(Object.values(sockets).map(s => s.waitFor(() => false, 600))); // let any stray events arrive
+
+  for (const name of ['paramedic', 'desk101', 'desk102']) {
+    assert.ok(!leaked(sockets[name]), `${name} must not receive patient details through the audit stream`);
+    assert.ok(!lockEvent(sockets[name]), `${name} must not receive the network-wide lock stream`);
+  }
+  assert.ok(!sockets.desk102.has('referral:incoming'), 'another hospital is not alerted');
+
+  // Active locks on request are scoped like GET /referrals/active.
+  await sockets.desk101.emit('request:active_locks');
+  await sockets.desk102.emit('request:active_locks');
+  await sockets.paramedic.emit('request:active_locks');
+  assert.ok(await sockets.desk101.waitFor(s => s.has('locks:update')));
+  assert.ok(await sockets.desk102.waitFor(s => s.has('locks:update')));
+  assert.equal(sockets.desk101.event('locks:update').length, 1);
+  assert.deepEqual(sockets.desk102.event('locks:update'), []);
+  assert.equal(await sockets.paramedic.waitFor(s => s.has('locks:update'), 600), false, 'paramedics cannot list referral locks');
+});
