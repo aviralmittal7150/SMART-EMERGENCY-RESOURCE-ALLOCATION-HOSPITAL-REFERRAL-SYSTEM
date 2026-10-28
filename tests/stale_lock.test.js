@@ -253,6 +253,43 @@ test('a throwing lock_released listener after a rejection still reports the fail
   assert.equal(locksFor(request.request_id).length, 0);
 });
 
+test('the engine refuses a referral to a CLOSED hospital, including one closed while the acquire waited', async () => {
+  const hospital = db.hospitals.find(h => h.hospital_id === 'H-101');
+  const resource = icu('H-101');
+  const before = { locked: resource.locked_capacity, available: resource.available_capacity };
+  const request = addRequest('WAITING');
+
+  hospital.emergency_status = 'CLOSED';
+  try {
+    await assert.rejects(lockingEngine.acquireSoftLock('H-101', request.request_id, ['ICU_BED']), /CLOSED/);
+
+    // Open when the acquire starts, closed while it waits for the row mutex.
+    hospital.emergency_status = 'OPEN';
+    const releaseRow = await db.acquireResourceLock(resource.resource_id);
+    const pending = lockingEngine.acquireSoftLock('H-101', request.request_id, ['ICU_BED']).then(() => 'granted', err => err.message);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    hospital.emergency_status = 'CLOSED';
+    releaseRow();
+    assert.match(await pending, /CLOSED/);
+  } finally {
+    hospital.emergency_status = 'OPEN';
+  }
+  assert.equal(resource.locked_capacity, before.locked);
+  assert.equal(resource.available_capacity, before.available);
+  assert.equal(locksFor(request.request_id).length, 0);
+});
+
+test('the engine refuses a hospital without the required specialist on duty', async () => {
+  const request = addRequest('WAITING');
+  request.required_specialist = 'CARDIOLOGIST'; // H-102 has no cardiologist
+  const resource = icu('H-102');
+  const lockedBefore = resource.locked_capacity;
+
+  await assert.rejects(lockingEngine.acquireSoftLock('H-102', request.request_id, ['ICU_BED']), /CARDIOLOGIST/);
+  assert.equal(resource.locked_capacity, lockedBefore);
+  assert.equal(locksFor(request.request_id).length, 0);
+});
+
 test('failover never revives a cancelled request', async () => {
   const request = addRequest('CANCELLED');
   const revived = await lockingEngine._tryFailover({

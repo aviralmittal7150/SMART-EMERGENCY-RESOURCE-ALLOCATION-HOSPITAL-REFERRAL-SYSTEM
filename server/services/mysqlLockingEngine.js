@@ -1,10 +1,8 @@
 // server/services/mysqlLockingEngine.js
 // MySQL-backed referral lock lifecycle (InnoDB transactions + SELECT ... FOR UPDATE).
 //
-// This is the database counterpart of services/lockingEngine.js. It is NOT yet wired into the
-// HTTP routes: those still read hospitals, doctors and requests from the in-memory store, so
-// the application as a whole still runs on that store. This module is verified by
-// tests/mysql_locking.test.js against a real MySQL server.
+// This is the database counterpart of services/lockingEngine.js, used by server/db/mysqlStore.js
+// when DB_USE_MEMORY=false. It is verified by tests/mysql_locking.test.js against a real MySQL server.
 //
 // Mapping of the OS/DBMS concepts:
 //   per-request mutex      -> SELECT ... FOR UPDATE on the EmergencyRequest row
@@ -19,7 +17,7 @@
 
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
-import { ALLOWED_TRANSITIONS, TERMINAL_STATES, MATCHING_STATES } from './lifecycle.js';
+import { ALLOWED_TRANSITIONS, TERMINAL_STATES, MATCHING_STATES, ON_ROAD_AMBULANCE_STATUSES } from './lifecycle.js';
 
 export const SOFT_LOCK_TTL_SEC = 90;
 const VALID_RESOURCE_TYPES = ['ICU_BED', 'VENTILATOR', 'OT'];
@@ -128,9 +126,11 @@ export class MySqlLockingEngine extends EventEmitter {
 
   async _acquire(conn, hospitalId, requestId, types) {
     // 1. Per-request mutex: every mutator of this request's lock state starts here.
-    const [requests] = await conn.query('SELECT status FROM EmergencyRequest WHERE request_id = ? FOR UPDATE', [requestId]);
+  //    Lock order: EmergencyRequest -> HospitalAcceptance -> Hospital (shared) -> Doctor (shared)
+  //    -> MedicalResource (sorted by type). Other writers of Hospital / Doctor hold only that one row.
+    const [requests] = await conn.query('SELECT status, required_specialist FROM EmergencyRequest WHERE request_id = ? FOR UPDATE', [requestId]);
     if (!requests.length) throw new LockError(`Emergency request ${requestId} not found.`, 'NOT_FOUND');
-    const status = requests[0].status;
+    const { status, required_specialist: specialist } = requests[0];
     if (!MATCHING_STATES.includes(status)) {
       throw new LockError(`Request ${requestId} is ${status} and cannot receive a referral.`);
     }
@@ -139,6 +139,19 @@ export class MySqlLockingEngine extends EventEmitter {
       "SELECT acceptance_id FROM HospitalAcceptance WHERE request_id = ? AND status = 'PENDING' FOR UPDATE", [requestId]
     );
     if (pending.length) throw new LockError(`Request ${requestId} already has an active referral lock.`);
+
+    // Hospital eligibility, checked under shared locks so a concurrent closure or specialist going off
+    // duty is serialised with this referral instead of slipping in after an unlocked pre-check.
+    const [hospitals] = await conn.query('SELECT emergency_status FROM Hospital WHERE hospital_id = ? FOR SHARE', [hospitalId]);
+    if (!hospitals.length) throw new LockError(`Hospital ${hospitalId} not found.`, 'NOT_FOUND');
+    if (hospitals[0].emergency_status === 'CLOSED') throw new LockError(`Hospital ${hospitalId} is CLOSED and cannot receive a referral.`);
+    if (specialist) {
+      const [doctors] = await conn.query(
+        "SELECT doctor_id FROM Doctor WHERE hospital_id = ? AND specialization = ? AND availability_status = 'AVAILABLE' LIMIT 1 FOR SHARE",
+        [hospitalId, specialist]
+      );
+      if (!doctors.length) throw new LockError(`Required specialist ${specialist} is not available at ${hospitalId}.`);
+    }
 
     // 2. Resource rows, always in sorted type order (global lock ordering => no lock cycles).
     const resourceIds = [];
@@ -250,6 +263,8 @@ export class MySqlLockingEngine extends EventEmitter {
   async commitAllocation(acceptanceId, actorId = 'HOSPITAL_DESK') {
     const outcome = await this._tx(async conn => {
       const ctx = await this._lockRequestAndAcceptance(conn, acceptanceId);
+      // A retry whose first response was lost: report the committed outcome, change nothing.
+      if (ctx?.acceptanceStatus === 'ACCEPTED') return { replay: await this._acceptedOutcome(conn, acceptanceId, ctx) };
       if (!ctx || ctx.acceptanceStatus !== 'PENDING') {
         throw new LockError(`No active lock found for acceptance ${acceptanceId}`);
       }
@@ -303,12 +318,39 @@ export class MySqlLockingEngine extends EventEmitter {
       return { result: { acceptanceId, requestId, hospitalId, status: 'ACCEPTED', ambulance_id: ambulanceId } };
     });
 
+    if (outcome.replay) return outcome.replay;
     if (outcome.refused) {
       this._notify('lock_released', { ...outcome.cancelled, status: 'CANCELLED', reason: outcome.refused });
       throw new LockError(outcome.refused);
     }
     this._notify('allocation_committed', outcome.result);
     return outcome.result;
+  }
+
+  /**
+   * Outcome of an already-accepted referral, for a retried accept. Only the referral that still holds
+   * the case's allocation qualifies; the ambulance is the case's current on-road unit (a replacement,
+   * if the original was swapped). Read-only: no allocation, assignment, audit row or event.
+   */
+  async _acceptedOutcome(conn, acceptanceId, { requestId, hospitalId, requestStatus }) {
+    if (!['ALLOCATED', 'IN_TREATMENT'].includes(requestStatus)) {
+      throw new LockError(`Referral ${acceptanceId} was accepted, but request ${requestId} is now ${requestStatus}.`);
+    }
+    const [holders] = await conn.query(
+      "SELECT DISTINCT hospital_id FROM ResourceAllocation WHERE request_id = ? AND status = 'COMMITTED'", [requestId]
+    );
+    const [others] = await conn.query(
+      "SELECT 1 FROM HospitalAcceptance WHERE request_id = ? AND status = 'ACCEPTED' AND acceptance_id <> ? LIMIT 1",
+      [requestId, acceptanceId]
+    );
+    if (others.length || holders.length !== 1 || holders[0].hospital_id !== hospitalId) {
+      throw new LockError(`Referral ${acceptanceId} does not hold the allocation for request ${requestId}.`);
+    }
+    const [units] = await conn.query(
+      'SELECT ambulance_id FROM Ambulance WHERE assigned_request_id = ? AND status IN (?) ORDER BY ambulance_id LIMIT 1',
+      [requestId, ON_ROAD_AMBULANCE_STATUSES]
+    );
+    return { acceptanceId, requestId, hospitalId, status: 'ACCEPTED', ambulance_id: units[0]?.ambulance_id || null, replayed: true };
   }
 
   async _cancelAcceptance(conn, acceptanceId, requestId, hospitalId, reason) {
@@ -333,6 +375,7 @@ export class MySqlLockingEngine extends EventEmitter {
         "UPDATE HospitalAcceptance SET status = 'REJECTED', rejection_reason = ?, responded_at = NOW() WHERE acceptance_id = ?",
         [rejectionReason, acceptanceId]
       );
+      await this._requeue(conn, ctx.requestId);
       await this._audit(conn, {
         request_id: ctx.requestId, hospital_id: ctx.hospitalId, event_type: 'LOCK_REJECTED',
         previous_state: 'PENDING_ACCEPTANCE', new_state: 'REJECTED', actor_role: 'HOSPITAL_DESK', actor_id: actorId,
@@ -341,13 +384,33 @@ export class MySqlLockingEngine extends EventEmitter {
       return { requestId: ctx.requestId, hospitalId: ctx.hospitalId, types };
     });
 
-    const next = await this._failover(released.requestId, released.types);
+    const next = await this._failoverAfterCommit(released.requestId, released.types);
     const result = {
       acceptanceId, requestId: released.requestId, hospitalId: released.hospitalId, status: 'REJECTED',
       next_acceptance_id: next?.acceptanceId || null, next_hospital_id: next?.hospitalId || null
     };
     this._notify('lock_released', result);
     return result;
+  }
+
+  /**
+   * Put a case whose pending referral just ended back in the queue, in the same transaction that ended
+   * it (the request row is already locked). Failover runs after that commit, so if it never happens
+   * (crash, lost connection) the case is WAITING and visible, not stuck in MATCHING with no referral.
+   * Only _acquire moves a case to MATCHING. A terminal or allocated case is left untouched.
+   */
+  async _requeue(conn, requestId) {
+    await conn.query("UPDATE EmergencyRequest SET status = 'WAITING' WHERE request_id = ? AND status = 'MATCHING'", [requestId]);
+  }
+
+  /** Failover for work that is already committed: a failure is logged and reported as "no next hospital". */
+  async _failoverAfterCommit(requestId, types) {
+    try {
+      return await this._failover(requestId, types);
+    } catch (err) {
+      console.error(`[MYSQL-LOCK] Failover for ${requestId} failed after commit; the case stays queued:`, err.message);
+      return null;
+    }
   }
 
   /**
@@ -390,10 +453,8 @@ export class MySqlLockingEngine extends EventEmitter {
         if (!(err instanceof LockError)) throw err; // a competing request took it, or the case changed: try the next
       }
     }
-    // Nobody can take it: back to the queue, unless the case has since been cancelled/completed.
-    await this.pool.query(
-      "UPDATE EmergencyRequest SET status = 'WAITING' WHERE request_id = ? AND status IN ('NEW', 'WAITING', 'MATCHING')", [requestId]
-    );
+    // Nobody can take it. The case is already WAITING (see _requeue), or MATCHING because a referral was
+    // placed meanwhile; either way it is correct, so it is not overwritten here.
     return null;
   }
 
@@ -408,6 +469,7 @@ export class MySqlLockingEngine extends EventEmitter {
         "UPDATE HospitalAcceptance SET status = 'EXPIRED', responded_at = NOW(), response_time_sec = ? WHERE acceptance_id = ?",
         [SOFT_LOCK_TTL_SEC, acceptanceId]
       );
+      await this._requeue(conn, ctx.requestId);
       await this._audit(conn, {
         request_id: ctx.requestId, hospital_id: ctx.hospitalId, event_type: 'LOCK_TTL_EXPIRED_FAILOVER',
         previous_state: 'PENDING_ACCEPTANCE', new_state: 'EXPIRED', metadata: { acceptanceId }
@@ -416,7 +478,7 @@ export class MySqlLockingEngine extends EventEmitter {
     });
     if (!outcome) return false;
 
-    const next = await this._failover(outcome.requestId, outcome.types);
+    const next = await this._failoverAfterCommit(outcome.requestId, outcome.types);
     this._notify('lock_expired', {
       acceptanceId, requestId: outcome.requestId, hospitalId: outcome.hospitalId,
       nextAcceptanceId: next?.acceptanceId || null, nextHospitalId: next?.hospitalId || null
@@ -440,10 +502,46 @@ export class MySqlLockingEngine extends EventEmitter {
     return expired;
   }
 
+  /**
+   * Recovery: a case is MATCHING only while it has a pending referral. One without (left by a crash
+   * between a rejection and its failover in older versions, or by a manual edit) is put back in the
+   * queue so it is visible again. Each case is re-checked under its row lock. Returns how many moved.
+   */
+  async requeueStrandedRequests() {
+    const [rows] = await this.pool.query(
+      `SELECT r.request_id FROM EmergencyRequest r WHERE r.status = 'MATCHING'
+         AND NOT EXISTS (SELECT 1 FROM HospitalAcceptance ha WHERE ha.request_id = r.request_id AND ha.status = 'PENDING')`
+    );
+    let moved = 0;
+    for (const { request_id: requestId } of rows) {
+      try {
+        const requeued = await this._tx(async conn => {
+          const [requests] = await conn.query('SELECT status FROM EmergencyRequest WHERE request_id = ? FOR UPDATE', [requestId]);
+          if (requests[0]?.status !== 'MATCHING') return false;
+          const [pending] = await conn.query(
+            "SELECT acceptance_id FROM HospitalAcceptance WHERE request_id = ? AND status = 'PENDING' FOR UPDATE", [requestId]
+          );
+          if (pending.length) return false;
+          await this._requeue(conn, requestId);
+          await this._audit(conn, {
+            request_id: requestId, event_type: 'STRANDED_MATCHING_REQUEUED', previous_state: 'MATCHING', new_state: 'WAITING'
+          });
+          return true;
+        });
+        if (requeued) moved += 1;
+      } catch (err) {
+        console.error(`[MYSQL-LOCK] Failed to re-queue ${requestId}:`, err.message);
+      }
+    }
+    return moved;
+  }
+
   /** Background sweeper (replaces the in-process 90s timers; survives restarts). Returns a stop function. */
   startExpirySweeper(intervalMs = 5000) {
     const timer = setInterval(() => {
-      this.expireStaleLocks().catch(err => console.error('[MYSQL-LOCK] Sweep failed:', err.message));
+      this.expireStaleLocks()
+        .then(() => this.requeueStrandedRequests())
+        .catch(err => console.error('[MYSQL-LOCK] Sweep failed:', err.message));
     }, intervalMs);
     timer.unref?.();
     return () => clearInterval(timer);
@@ -519,8 +617,12 @@ export class MySqlLockingEngine extends EventEmitter {
         }
         await this._setAllocations(conn, committed, 'RELEASED');
         released = committed.length;
+        // Units serving the case leave it; only those on the road return to the pool. A unit that is out
+        // of service (MAINTENANCE) stays out, or the next accept would auto-dispatch it.
         await conn.query(
-          "UPDATE Ambulance SET status = 'AVAILABLE', assigned_request_id = NULL, destination_hospital_id = NULL WHERE assigned_request_id = ?",
+          `UPDATE Ambulance SET status = IF(status IN ('DISPATCHED', 'IN_TRANSIT'), 'AVAILABLE', status),
+                                assigned_request_id = NULL, destination_hospital_id = NULL
+           WHERE assigned_request_id = ?`,
           [requestId]
         );
       }

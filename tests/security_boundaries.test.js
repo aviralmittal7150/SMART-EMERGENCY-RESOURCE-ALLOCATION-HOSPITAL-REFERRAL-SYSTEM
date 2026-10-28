@@ -60,6 +60,13 @@ test('server source is not public, frontend assets are, and desks only see their
 
   assert.equal((await api('/api/v1/emergencies')).response.status, 401);
 
+  // The dev frontend (:3000) is cross-origin: its Idempotency-Key header must survive the CORS preflight.
+  const preflight = await fetch(`${BASE_URL}/api/v1/emergencies`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'http://localhost:3000', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type,idempotency-key' }
+  });
+  assert.match(preflight.headers.get('access-control-allow-headers') || '', /Idempotency-Key/i);
+
   const paramedic = await login('UNIT-402', 'paramedic123');
   const desk101 = await login('apex_desk', 'hospital123');
   const desk102 = await login('stjude_desk', 'hospital123');

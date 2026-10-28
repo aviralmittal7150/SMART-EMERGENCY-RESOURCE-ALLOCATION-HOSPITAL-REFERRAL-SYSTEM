@@ -5,6 +5,7 @@
 import { EventEmitter } from 'events';
 import { db } from '../db/seed.js';
 import { v4 as uuidv4 } from 'uuid';
+import { ON_ROAD_AMBULANCE_STATUSES } from './lifecycle.js';
 
 const SOFT_LOCK_TTL_MS = 90_000; // 90 seconds
 const TERMINAL_REQUEST_STATES = ['CANCELLED', 'COMPLETED'];
@@ -40,6 +41,7 @@ class LockingEngine extends EventEmitter {
     }
 
     this._assertRequestAllocatable(requestId);
+    this._assertHospitalEligible(hospitalId, requestId);
 
     const duplicateRequest = [...this._activeLocks.values()].find(lock => lock.requestId === requestId);
     if (duplicateRequest) {
@@ -78,7 +80,9 @@ class LockingEngine extends EventEmitter {
       // Waiting for the row mutexes can yield for real time, during which the
       // request may have been cancelled/completed. Re-check now that nothing
       // can interleave before the lock is registered; the catch block rolls back.
+      // The hospital may also have closed, or its specialist gone off duty, meanwhile.
       this._assertRequestAllocatable(requestId);
+      this._assertHospitalEligible(hospitalId, requestId);
 
       const acceptanceId = `ACC-${uuidv4().slice(0, 8).toUpperCase()}`;
       const expiresAt = Date.now() + SOFT_LOCK_TTL_MS;
@@ -161,15 +165,17 @@ class LockingEngine extends EventEmitter {
   // P2-03: Commit Allocation — ACID atomic transaction on ACCEPT
   // ─────────────────────────────────────────────────────────────────────────
   async commitAllocation(acceptanceId, actorId = 'HOSPITAL_DESK') {
-    const lockEntry = this._activeLocks.get(acceptanceId);
-    if (!lockEntry) throw new Error(`No active lock found for acceptance ${acceptanceId}`);
+    // Once committed the lock entry is gone; a retried accept is serialized on the acceptance's request.
+    const requestId = this._activeLocks.get(acceptanceId)?.requestId
+      || db.hospitalAcceptances.find(a => a.acceptance_id === acceptanceId)?.request_id;
+    if (!requestId) throw new Error(`No active lock found for acceptance ${acceptanceId}`);
 
-    return this._withRequestLock(lockEntry.requestId, () => this._commitAllocation(acceptanceId, actorId));
+    return this._withRequestLock(requestId, () => this._commitAllocation(acceptanceId, actorId));
   }
 
   async _commitAllocation(acceptanceId, actorId = 'HOSPITAL_DESK') {
     const lockEntry = this._activeLocks.get(acceptanceId);
-    if (!lockEntry) throw new Error(`No active lock found for acceptance ${acceptanceId}`);
+    if (!lockEntry) return this._acceptedOutcome(acceptanceId);
 
     // A cancelled/completed request must never be allocated. Free the soft-lock
     // here too, in case cancellation was recorded but its cleanup is still queued.
@@ -254,6 +260,33 @@ class LockingEngine extends EventEmitter {
     };
     this._afterApplied(`Committed ${acceptanceId}`, () => this.emit('allocation_committed', result));
     return result;
+  }
+
+  /**
+   * Outcome of an already-accepted referral, for a retried accept whose first response was lost.
+   * Only the referral that still holds the case's allocation qualifies; the ambulance is the case's
+   * current on-road unit. Read-only: no allocation, assignment, audit entry or event.
+   */
+  _acceptedOutcome(acceptanceId) {
+    const acc = db.hospitalAcceptances.find(a => a.acceptance_id === acceptanceId);
+    if (acc?.status !== 'ACCEPTED') throw new Error(`No active lock found for acceptance ${acceptanceId}`);
+    const { request_id: requestId, hospital_id: hospitalId } = acc;
+
+    const request = db.emergencyRequests.find(r => r.request_id === requestId);
+    if (!['ALLOCATED', 'IN_TREATMENT'].includes(request?.status)) {
+      throw new Error(`Referral ${acceptanceId} was accepted, but request ${requestId} is now ${request?.status}.`);
+    }
+    const holders = new Set(db.resourceAllocations
+      .filter(a => a.request_id === requestId && a.status === 'COMMITTED').map(a => a.hospital_id));
+    const otherAccepted = db.hospitalAcceptances
+      .some(a => a.request_id === requestId && a.status === 'ACCEPTED' && a.acceptance_id !== acceptanceId);
+    if (otherAccepted || holders.size !== 1 || !holders.has(hospitalId)) {
+      throw new Error(`Referral ${acceptanceId} does not hold the allocation for request ${requestId}.`);
+    }
+    const unit = db.ambulances
+      .filter(a => a.assigned_request_id === requestId && ON_ROAD_AMBULANCE_STATUSES.includes(a.status))
+      .sort((a, b) => a.ambulance_id.localeCompare(b.ambulance_id))[0];
+    return { acceptanceId, requestId, hospitalId, status: 'ACCEPTED', ambulance_id: unit?.ambulance_id || null, replayed: true };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -531,6 +564,20 @@ class LockingEngine extends EventEmitter {
   _assertRequestAllocatable(requestId) {
     const status = this._terminalRequestStatus(requestId);
     if (status) throw new Error(`Request ${requestId} is ${status} and cannot receive a referral.`);
+  }
+
+  // A referral may only target an open hospital that has the case's required specialist on duty.
+  // The route pre-checks this too, but only this check runs where nothing can interleave.
+  _assertHospitalEligible(hospitalId, requestId) {
+    const hospital = db.hospitals.find(h => h.hospital_id === hospitalId);
+    if (hospital?.emergency_status === 'CLOSED') {
+      throw new Error(`Hospital ${hospitalId} is CLOSED and cannot receive a referral.`);
+    }
+    const specialist = db.emergencyRequests.find(r => r.request_id === requestId)?.required_specialist;
+    if (specialist && !db.doctors.some(d => d.hospital_id === hospitalId
+      && d.specialization === specialist && d.availability_status === 'AVAILABLE')) {
+      throw new Error(`Required specialist ${specialist} is not available at ${hospitalId}.`);
+    }
   }
 
   _releaseSoftLocks(lockEntry) {

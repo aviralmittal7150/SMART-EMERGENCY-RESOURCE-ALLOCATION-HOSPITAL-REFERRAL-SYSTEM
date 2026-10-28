@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { openTestDatabase, mysqlServerEnv, testConfig } from './helpers/mysqlTestDb.js';
+import { createPool } from '../server/db/pool.js';
+import { MySqlStore } from '../server/db/mysqlStore.js';
 
 const SHARED_PORT = 4127;
 const RESTART_PORT = 4128;
@@ -64,7 +66,7 @@ if (handle.skip) {
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: body && JSON.stringify(body)
     });
-    return { status: response.status, body: await response.json().catch(() => null) };
+    return { status: response.status, headers: response.headers, body: await response.json().catch(() => null) };
   };
 
   async function login(call, username, password) {
@@ -202,6 +204,89 @@ if (handle.skip) {
     assert.equal(await count('SELECT COUNT(*) AS n FROM Ambulance WHERE assigned_request_id = ?', [id]), 1);
   });
 
+  test('a unit taken out of service mid-case frees the case for a replacement and is never returned to AVAILABLE by closing it', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Breakdown');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    const accepted = await call(`/api/v1/referrals/${lock.body.acceptance_id}/accept`, tokens.desk103, 'POST');
+    const brokenUnit = accepted.body.ambulance_id;
+    assert.ok(brokenUnit, 'precondition: accept dispatched a unit');
+
+    const detail = async () => (await call(`/api/v1/emergencies/${id}`, tokens.admin)).body.request;
+    assert.deepEqual([(await detail()).assigned_ambulance_id, (await detail()).transport_required], [brokenUnit, false]);
+
+    assert.equal((await call(`/api/v1/ambulances/${brokenUnit}/status`, tokens.paramedic, 'PATCH', { status: 'MAINTENANCE' })).status, 200);
+
+    // The case stays visible and active, and both views say it needs transport.
+    const listed = (await call('/api/v1/emergencies', tokens.admin)).body.queue.find(r => r.request_id === id);
+    for (const view of [await detail(), listed]) {
+      assert.deepEqual([view.status, view.assigned_ambulance_id, view.transport_required], ['ALLOCATED', null, true]);
+    }
+    const trail = (await call(`/api/v1/emergencies/${id}/audit`, tokens.admin)).body.audit_trail;
+    const left = trail.find(e => e.event_type === 'AMBULANCE_STATUS_CHANGED' && e.new_state === 'MAINTENANCE');
+    assert.ok(left, 'the breakdown is in the case audit trail');
+    assert.equal(left.metadata.released_from_request, id);
+    assert.equal((await call(`/api/v1/ambulances/${brokenUnit}/status`, tokens.paramedic, 'PATCH', { status: 'DISPATCHED', request_id: id })).status, 409,
+      'an out-of-service unit cannot be re-dispatched');
+
+    const spare = (await call('/api/v1/ambulances?status=AVAILABLE', tokens.admin)).body.ambulances[0];
+    const replacement = await call(`/api/v1/ambulances/${spare.ambulance_id}/status`, tokens.paramedic, 'PATCH', { status: 'DISPATCHED', request_id: id });
+    assert.equal(replacement.status, 200, `replacement refused: ${replacement.body?.error}`);
+    assert.deepEqual([(await detail()).assigned_ambulance_id, (await detail()).transport_required], [spare.ambulance_id, false]);
+
+    assert.equal((await call(`/api/v1/emergencies/${id}/status`, tokens.admin, 'PATCH', { status: 'COMPLETED' })).status, 200);
+    const statusOf = async unit => (await sqlOne('SELECT status AS s FROM Ambulance WHERE ambulance_id = ?', [unit])).s;
+    assert.equal(await statusOf(brokenUnit), 'MAINTENANCE', 'an out-of-service vehicle must not re-enter the dispatch pool');
+    assert.equal(await statusOf(spare.ambulance_id), 'AVAILABLE');
+    assert.equal(await count('SELECT COUNT(*) AS n FROM Ambulance WHERE assigned_request_id = ?', [id]), 0);
+  });
+
+  test('no lifecycle path (rejection, TTL expiry, accept, cancel) returns an out-of-service unit to the pool', async () => {
+    await sql("UPDATE Ambulance SET status = 'MAINTENANCE', assigned_request_id = NULL WHERE ambulance_id = 'AMB-01'");
+    // Every other unit is busy: AMB-01 is the only unit the pool could wrongly hand out.
+    await sql("UPDATE Ambulance SET status = 'IN_TRANSIT' WHERE ambulance_id <> 'AMB-01'");
+    const amb01 = async () => (await sqlOne("SELECT status AS s FROM Ambulance WHERE ambulance_id = 'AMB-01'")).s;
+
+    // Rejection + failover, then a real TTL expiry handled by the server's own sweeper.
+    const rejected = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Pool Reject');
+    const first = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: rejected, hospital_id: 'H-103' });
+    const reject = await call(`/api/v1/referrals/${first.body.acceptance_id}/reject`, tokens.desk103, 'POST', { rejection_reason: 'Full' });
+    assert.equal(reject.status, 200);
+    assert.ok(reject.body.next_acceptance_id, 'precondition: failover placed a new lock, so the TTL path below really runs');
+    await sql('UPDATE HospitalAcceptance SET lock_expires_at = NOW() - INTERVAL 1 SECOND WHERE acceptance_id = ?', [reject.body.next_acceptance_id]);
+    const deadline = Date.now() + 9000; // the server's sweeper runs every 5 s
+    while ((await sqlOne('SELECT status AS s FROM HospitalAcceptance WHERE acceptance_id = ?', [reject.body.next_acceptance_id])).s === 'PENDING') {
+      assert.ok(Date.now() < deadline, 'the sweeper expired the lock');
+      await sleep(250);
+    }
+    assert.equal(await amb01(), 'MAINTENANCE', 'rejection / failover / TTL expiry');
+
+    // An accept with no usable unit: nothing is claimed, and the case says transport is needed.
+    const other = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Pool Accept');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: other, hospital_id: 'H-103' });
+    const accepted = await call(`/api/v1/referrals/${lock.body.acceptance_id}/accept`, tokens.desk103, 'POST');
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.body.ambulance_id, null);
+    const view = (await call(`/api/v1/emergencies/${other}`, tokens.admin)).body.request;
+    assert.deepEqual([view.assigned_ambulance_id, view.transport_required], [null, true]);
+
+    for (const [requestId, status] of [[other, 'COMPLETED'], [rejected, 'CANCELLED']]) {
+      assert.equal((await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status })).status, 200);
+    }
+    assert.equal(await amb01(), 'MAINTENANCE', 'accept / completion / cancellation');
+  });
+
+  test('closing a case never puts an assigned unit that is out of service back in the pool (rows written before this fix)', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Legacy Breakdown');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    const unit = (await call(`/api/v1/referrals/${lock.body.acceptance_id}/accept`, tokens.desk103, 'POST')).body.ambulance_id;
+    // State an older version could leave behind: MAINTENANCE but still assigned to the case.
+    await sql("UPDATE Ambulance SET status = 'MAINTENANCE' WHERE ambulance_id = ?", [unit]);
+
+    assert.equal((await call(`/api/v1/emergencies/${id}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' })).status, 200);
+    const row = await sqlOne('SELECT status, assigned_request_id FROM Ambulance WHERE ambulance_id = ?', [unit]);
+    assert.deepEqual({ ...row }, { status: 'MAINTENANCE', assigned_request_id: null });
+  });
+
   test('10 cancel-vs-accept races over HTTP never leave the case allocated or capacity leaked', async () => {
     for (let round = 0; round < 10; round += 1) {
       const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', `Fictional Cancel Race ${round}`);
@@ -307,6 +392,168 @@ if (handle.skip) {
     assert.equal((await post({ patient_name: 'Fictional', clinical_notes: 'n'.repeat(20001) })).status, 400);
     // The largest accepted notes (20 000 three-byte characters) still fit the TEXT column.
     assert.equal((await post({ patient_name: 'Fictional', clinical_notes: '€'.repeat(20000) })).status, 201);
+  });
+
+  // ── Idempotent creation ───────────────────────────────────────────────────
+  test('concurrent creates with one Idempotency-Key register exactly one case; a reused key with another body is refused', async () => {
+    const post = (key, name) => fetch(`http://127.0.0.1:${SHARED_PORT}/api/v1/emergencies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.paramedic}`, 'Idempotency-Key': key },
+      body: JSON.stringify({ patient_name: name, age: 33, emergency_type: 'RESPIRATORY', triage_priority: 2 })
+    }).then(async r => ({ status: r.status, replayed: r.headers.get('idempotent-replayed'), body: await r.json() }));
+
+    const results = await Promise.all(Array.from({ length: 8 }, () => post('mysql-double-click', 'Fictional Idempotent MySQL')));
+    assert.ok(results.every(r => r.status === 201), results.map(r => `${r.status}:${r.body.error ?? ''}`).join(','));
+    assert.equal(new Set(results.map(r => r.body.request_id)).size, 1);
+    assert.equal(results.filter(r => r.replayed === 'true').length, 7);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM Patient WHERE full_name = 'Fictional Idempotent MySQL'"), 1);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM EmergencyHistory WHERE request_id = ? AND event_type = 'REQUEST_CREATED'", [results[0].body.request_id]), 1);
+
+    const conflicting = await post('mysql-double-click', 'Fictional Someone Else');
+    assert.equal(conflicting.status, 422);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM Patient WHERE full_name = 'Fictional Someone Else'"), 0);
+  });
+
+  test('a failed create does not burn its Idempotency-Key: the retry creates the case', async () => {
+    await sql('RENAME TABLE EmergencyHistory TO EmergencyHistory_offline');
+    let failed;
+    try {
+      failed = await fetch(`http://127.0.0.1:${SHARED_PORT}/api/v1/emergencies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.paramedic}`, 'Idempotency-Key': 'retry-after-failure' },
+        body: JSON.stringify({ patient_name: 'Fictional Retry After Failure', age: 30, emergency_type: 'GENERAL', triage_priority: 3 })
+      });
+    } finally {
+      await sql('RENAME TABLE EmergencyHistory_offline TO EmergencyHistory');
+    }
+    assert.equal(failed.status, 500);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM IdempotencyKey WHERE idem_key = 'retry-after-failure'"), 0, 'the key rolled back with the case');
+
+    const retried = await fetch(`http://127.0.0.1:${SHARED_PORT}/api/v1/emergencies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.paramedic}`, 'Idempotency-Key': 'retry-after-failure' },
+      body: JSON.stringify({ patient_name: 'Fictional Retry After Failure', age: 30, emergency_type: 'GENERAL', triage_priority: 3 })
+    });
+    assert.equal(retried.status, 201);
+    assert.equal(retried.headers.get('idempotent-replayed'), null);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM Patient WHERE full_name = 'Fictional Retry After Failure'"), 1);
+  });
+
+  test('idempotency keys older than a day are purged', async () => {
+    const store = new MySqlStore({ pool: createPool({ ...testConfig, connectionLimit: 2 }) });
+    try {
+      await sql("INSERT INTO IdempotencyKey (actor_id, endpoint, idem_key, request_hash, resource_id, created_at) VALUES ('U', 'E', 'old', REPEAT('a', 64), 'REQ-OLD', NOW() - INTERVAL 25 HOUR), ('U', 'E', 'new', REPEAT('a', 64), 'REQ-NEW', NOW())");
+      assert.equal(await store.purgeExpiredIdempotencyKeys(), 1);
+      assert.deepEqual((await sql("SELECT idem_key FROM IdempotencyKey WHERE actor_id = 'U'")).map(r => r.idem_key), ['new']);
+    } finally {
+      await store.close();
+    }
+  });
+
+  // ── Retried accept (the first response was lost after the commit) ────────
+  const acceptCall = (acceptanceId, token) => call(`/api/v1/referrals/${acceptanceId}/accept`, token, 'POST');
+  const referralState = async requestId => ({
+    resources: await sql("SELECT resource_id, available_capacity, locked_capacity FROM MedicalResource WHERE hospital_id IN ('H-102', 'H-103') ORDER BY resource_id"),
+    allocations: await sql('SELECT allocation_id, status FROM ResourceAllocation WHERE request_id = ? ORDER BY allocation_id', [requestId]),
+    units: await sql('SELECT ambulance_id, status FROM Ambulance WHERE assigned_request_id = ? ORDER BY ambulance_id', [requestId]),
+    acceptances: await sql('SELECT acceptance_id, status, responded_at FROM HospitalAcceptance WHERE request_id = ? ORDER BY acceptance_id', [requestId]),
+    history: await count('SELECT COUNT(*) AS n FROM EmergencyHistory WHERE request_id = ?', [requestId]),
+    alerts: await count('SELECT COUNT(*) AS n FROM Alert WHERE request_id = ?', [requestId])
+  });
+  const committedAudits = requestId => count("SELECT COUNT(*) AS n FROM EmergencyHistory WHERE request_id = ? AND event_type = 'ALLOCATION_COMMITTED'", [requestId]);
+  // The hospital alert is written by the server's post-commit listener, which can finish after the accept responds.
+  async function waitForAlert(requestId, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (await count('SELECT COUNT(*) AS n FROM Alert WHERE request_id = ?', [requestId]) < 1) {
+      assert.ok(Date.now() < deadline, `no alert recorded for ${requestId} within ${timeoutMs} ms of the accept`);
+      await sleep(50);
+    }
+  }
+
+  test('a retried accept replays the committed allocation over HTTP and re-applies nothing', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Accept Retry');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    assert.equal(lock.status, 201);
+    const first = await acceptCall(lock.body.acceptance_id, tokens.desk103);
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get('idempotent-replayed'), null);
+    assert.ok(first.body.ambulance_id, 'precondition: accept dispatched a unit');
+    await waitForAlert(id);
+    const before = await referralState(id);
+
+    const retries = await Promise.all([tokens.desk103, tokens.desk103, tokens.admin].map(token => acceptCall(lock.body.acceptance_id, token)));
+    for (const retry of retries) {
+      assert.equal(retry.status, 200, JSON.stringify(retry.body));
+      assert.equal(retry.headers.get('idempotent-replayed'), 'true');
+      assert.deepEqual(
+        [retry.body.status, retry.body.replayed, retry.body.acceptanceId, retry.body.requestId, retry.body.hospitalId, retry.body.ambulance_id],
+        ['ACCEPTED', true, lock.body.acceptance_id, id, 'H-103', first.body.ambulance_id]
+      );
+    }
+    assert.deepEqual(await referralState(id), before, 'no capacity, allocation, ambulance, acceptance, history or alert change');
+    assert.equal(await committedAudits(id), 1);
+  });
+
+  test('a retried accept reports the case\'s current transport after the unit was swapped', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Accept Retry Swap');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    const original = (await acceptCall(lock.body.acceptance_id, tokens.desk103)).body.ambulance_id;
+    assert.ok(original);
+
+    assert.equal((await call(`/api/v1/ambulances/${original}/status`, tokens.admin, 'PATCH', { status: 'MAINTENANCE' })).status, 200);
+    const stranded = await acceptCall(lock.body.acceptance_id, tokens.desk103);
+    assert.equal(stranded.status, 200);
+    assert.deepEqual([stranded.body.replayed, stranded.body.ambulance_id], [true, null], 'an out-of-service unit is not reported as the transport');
+
+    const { ambulance_id: replacement } = await sqlOne("SELECT ambulance_id FROM Ambulance WHERE status = 'AVAILABLE' ORDER BY ambulance_id LIMIT 1");
+    const dispatched = await call(`/api/v1/ambulances/${replacement}/status`, tokens.admin, 'PATCH', { status: 'DISPATCHED', request_id: id });
+    assert.equal(dispatched.status, 200, JSON.stringify(dispatched.body));
+    const retried = await acceptCall(lock.body.acceptance_id, tokens.desk103);
+    assert.equal(retried.status, 200);
+    assert.deepEqual([retried.body.replayed, retried.body.ambulance_id], [true, replacement]);
+    assert.deepEqual((await sql('SELECT ambulance_id FROM Ambulance WHERE assigned_request_id = ?', [id])).map(r => r.ambulance_id), [replacement]);
+    assert.equal((await sqlOne('SELECT status FROM Ambulance WHERE ambulance_id = ?', [original])).status, 'MAINTENANCE');
+    assert.equal(await committedAudits(id), 1);
+  });
+
+  test('only the referral holding the allocation replays, only for its own hospital, only while the case is active', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Accept Retry Conflict');
+    // A referral to H-102 that was withdrawn (re-queued) before the case was placed at H-103.
+    const earlier = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-102' });
+    assert.equal(earlier.status, 201);
+    assert.equal((await call(`/api/v1/emergencies/${id}/status`, tokens.admin, 'PATCH', { status: 'WAITING' })).status, 200);
+    const current = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    assert.equal(current.status, 201);
+    assert.equal((await acceptCall(current.body.acceptance_id, tokens.desk103)).status, 200);
+    await waitForAlert(id);
+    const before = await referralState(id);
+
+    // A different referral of the same (allocated) case is not a replay.
+    const superseded = await acceptCall(earlier.body.acceptance_id, tokens.admin);
+    assert.equal(superseded.status, 409);
+    assert.equal(superseded.body.replayed, undefined);
+    // Another hospital's desk (here, the earlier referral's) cannot replay the accept.
+    assert.equal((await acceptCall(current.body.acceptance_id, tokens.desk102)).status, 403);
+    assert.deepEqual(await referralState(id), before);
+
+    // A record claiming the case was also accepted elsewhere makes neither referral replayable.
+    const { status: earlierStatus } = await sqlOne('SELECT status FROM HospitalAcceptance WHERE acceptance_id = ?', [earlier.body.acceptance_id]);
+    await sql("UPDATE HospitalAcceptance SET status = 'ACCEPTED' WHERE acceptance_id = ?", [earlier.body.acceptance_id]);
+    const conflicting = await acceptCall(earlier.body.acceptance_id, tokens.admin);
+    assert.equal(conflicting.status, 409);
+    assert.match(conflicting.body.error, /does not hold the allocation/);
+    assert.equal((await acceptCall(current.body.acceptance_id, tokens.desk103)).status, 409);
+    await sql('UPDATE HospitalAcceptance SET status = ? WHERE acceptance_id = ?', [earlierStatus, earlier.body.acceptance_id]);
+    assert.deepEqual(await referralState(id), before);
+
+    // Once the case is closed a late retry is refused and commits nothing again.
+    assert.equal((await call(`/api/v1/emergencies/${id}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' })).status, 200);
+    const late = await acceptCall(current.body.acceptance_id, tokens.desk103);
+    assert.equal(late.status, 409);
+    assert.match(late.body.error, /CANCELLED/);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM ResourceAllocation WHERE request_id = ? AND status IN ('LOCKED', 'COMMITTED')", [id]), 0);
+    assert.equal(await count('SELECT COUNT(*) AS n FROM Ambulance WHERE assigned_request_id = ?', [id]), 0);
+    assert.equal(await committedAudits(id), 1);
   });
 
   // ── Authorization boundaries (MySQL mode) ─────────────────────────────────

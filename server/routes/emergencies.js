@@ -2,6 +2,7 @@
 // Emergency Request Lifecycle API — /api/v1/emergencies
 
 import express from 'express';
+import { createHash } from 'node:crypto';
 import { authenticate, authorize } from '../middleware/auth.js';
 import { store } from '../db/store.js';
 import { respondStoreError } from '../db/storeErrors.js';
@@ -17,6 +18,10 @@ const actorOf = req => ({ role: req.user.role, id: req.user.user_id });
 
 // Hospital desks may only see cases referred to their own facility (patient data minimisation).
 const scopeOf = req => (req.user.role === 'HOSPITAL_DESK' ? req.user.hospital_id : undefined);
+
+// Optional Idempotency-Key header: a client retrying a create (timeout, double click) sends the same
+// key and gets the original case back instead of registering the patient twice. Keys are per user.
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{1,100}$/;
 
 // ────────────────────────────────────────────────────────────
 // GET /api/v1/emergencies
@@ -51,6 +56,11 @@ router.post('/',
       triage_priority = 3, clinical_notes, pickup_lat, pickup_lng,
       contact_phone, required_resources = [], required_specialist = null
     } = req.body;
+
+    const idempotencyKey = req.get('Idempotency-Key');
+    if (idempotencyKey !== undefined && !IDEMPOTENCY_KEY.test(idempotencyKey)) {
+      return res.status(400).json({ error: 'Idempotency-Key must be 1-100 characters: letters, digits, "_", "-", ".", ":".' });
+    }
 
     if (typeof patient_name !== 'string' || !patient_name.trim() || !emergency_type) {
       return res.status(400).json({ error: 'Required: patient_name, emergency_type, triage_priority.' });
@@ -96,7 +106,7 @@ router.post('/',
       return res.status(400).json({ error: 'pickup_lat/pickup_lng must be valid coordinates.' });
     }
 
-    const created = await store.createRequest({
+    const input = {
       patient: {
         full_name:       patient_name,
         age:             parsedAge,
@@ -114,8 +124,23 @@ router.post('/',
         pickup_lng:              longitude,
         clinical_notes:          clinical_notes || ''
       }
-    }, actorOf(req));
+    };
+    // The fingerprint covers the validated input, so a key reused for a different case is detected.
+    const idempotency = idempotencyKey === undefined ? null : {
+      key: idempotencyKey,
+      endpoint: 'POST /emergencies',
+      fingerprint: createHash('sha256').update(JSON.stringify(input)).digest('hex')
+    };
 
+    let created;
+    try {
+      created = await store.createRequest(input, actorOf(req), { idempotency });
+    } catch (err) {
+      if (!respondStoreError(res, err)) throw err;
+      return;
+    }
+
+    if (created.replayed) res.set('Idempotent-Replayed', 'true');
     res.status(201).json({
       success: true,
       message: `Emergency request ${created.request_id} created and enqueued in OS Priority Queue.`,

@@ -11,6 +11,10 @@
 // Request ids with a dispatch call currently in flight (duplicate-click guard).
 const defaultInFlight = new Set();
 
+// Only a unit on the road is transport for a case (matches ON_ROAD_AMBULANCE_STATUSES on the server).
+// An AVAILABLE or MAINTENANCE unit is never shown as assigned, so dispatch of a replacement stays open.
+const ON_ROAD = ['DISPATCHED', 'IN_TRANSIT'];
+
 export function isDispatchInFlight(requestId, inFlight = defaultInFlight) {
   return inFlight.has(requestId);
 }
@@ -18,18 +22,18 @@ export function isDispatchInFlight(requestId, inFlight = defaultInFlight) {
 /**
  * The ambulance already assigned to the accepted referral's case, or null.
  * `assigned_request_id` from the API is authoritative. Right after accept (before the
- * workspace refresh lands) the accept response's `ambulance_id` bridges the gap, but only
- * while that unit is not AVAILABLE, so a unit released after completion is not mistaken
- * for an assignment.
+ * workspace refresh lands) the accept response's `ambulance_id` bridges the gap. Either way
+ * only a unit on the road counts: one released after completion, or taken out of service
+ * (MAINTENANCE), is not mistaken for an assignment.
  */
 export function findAssignedAmbulance(ambulances, referral) {
   if (!referral) return null;
-  const list = Array.isArray(ambulances) ? ambulances : [];
+  const list = (Array.isArray(ambulances) ? ambulances : []).filter(a => ON_ROAD.includes(a.status));
   const byAssignment = list.find(a => a.assigned_request_id && a.assigned_request_id === referral.requestId);
   if (byAssignment) return byAssignment;
   if (!referral.ambulanceId) return null;
   const byId = list.find(a => (a.id || a.ambulance_id) === referral.ambulanceId);
-  if (byId && byId.status !== 'AVAILABLE' && (!byId.assigned_request_id || byId.assigned_request_id === referral.requestId)) {
+  if (byId && (!byId.assigned_request_id || byId.assigned_request_id === referral.requestId)) {
     return byId;
   }
   return null;

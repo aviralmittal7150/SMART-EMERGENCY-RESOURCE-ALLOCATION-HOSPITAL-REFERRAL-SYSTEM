@@ -9,6 +9,7 @@ import express from 'express';
 import { db } from '../server/db/seed.js';
 import { lockingEngine } from '../server/services/lockingEngine.js';
 import { generateToken } from '../server/middleware/auth.js';
+import { getStore } from '../server/db/store.js';
 import emergenciesRoutes from '../server/routes/emergencies.js';
 import referralsRoutes from '../server/routes/referrals.js';
 import analyticsRoutes from '../server/routes/analytics.js';
@@ -42,7 +43,7 @@ async function call(path, token, method = 'GET', body) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: body && JSON.stringify(body)
   });
-  return { status: response.status, body: await response.json() };
+  return { status: response.status, headers: response.headers, body: await response.json() };
 }
 
 async function createCase(emergencyType = 'CARDIAC') {
@@ -255,6 +256,81 @@ test('dispatch requires an accepted referral and an admin cannot force MATCHING 
   await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
 }));
 
+test('a unit taken out of service mid-case frees the case for a replacement and is never returned to AVAILABLE by closing it', () => withFleetRestored(async () => {
+  const { requestId, autoAmbulance } = await acceptedCase();
+  assert.ok(autoAmbulance, 'precondition: accept dispatched a unit');
+  const unitOf = id => db.ambulances.find(a => a.ambulance_id === id);
+
+  const caseView = async () => (await call(`/api/v1/emergencies/${requestId}`, tokens.admin)).body.request;
+  const queueRow = async () => (await call('/api/v1/emergencies', tokens.admin)).body.queue.find(r => r.request_id === requestId);
+  assert.deepEqual([(await caseView()).assigned_ambulance_id, (await caseView()).transport_required], [autoAmbulance, false]);
+
+  // The dispatched vehicle breaks down en route.
+  const broken = await call(`/api/v1/ambulances/${autoAmbulance}/status`, tokens.paramedic, 'PATCH', { status: 'MAINTENANCE' });
+  assert.equal(broken.status, 200);
+
+  // The case stays visible, active, and flagged as needing transport, in the list and the detail.
+  for (const view of [await caseView(), await queueRow()]) {
+    assert.equal(view.status, 'ALLOCATED');
+    assert.equal(view.assigned_ambulance_id, null, 'no usable ambulance is assigned');
+    assert.equal(view.transport_required, true);
+  }
+  // ...and its own audit trail records that the unit left it.
+  const trail = (await call(`/api/v1/emergencies/${requestId}/audit`, tokens.admin)).body.audit_trail;
+  const left = trail.find(e => e.event_type === 'AMBULANCE_STATUS_CHANGED' && e.new_state === 'MAINTENANCE');
+  assert.ok(left, 'the breakdown is in the case audit trail');
+  assert.equal(left.metadata.released_from_request, requestId);
+
+  // An out-of-service unit cannot be dispatched again.
+  assert.equal((await call(`/api/v1/ambulances/${autoAmbulance}/status`, tokens.paramedic, 'PATCH', { status: 'DISPATCHED', request_id: requestId })).status, 409);
+
+  // The patient must be able to get a replacement unit.
+  const replacement = freeAmbulance();
+  const dispatched = await call(`/api/v1/ambulances/${replacement.ambulance_id}/status`, tokens.paramedic, 'PATCH',
+    { status: 'DISPATCHED', request_id: requestId });
+  assert.equal(dispatched.status, 200, `replacement refused: ${dispatched.body.error}`);
+  assert.deepEqual([(await caseView()).assigned_ambulance_id, (await caseView()).transport_required], [replacement.ambulance_id, false]);
+
+  // Closing the case frees the unit that served it, but the broken one stays out of service.
+  assert.equal((await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'COMPLETED' })).status, 200);
+  assert.equal(unitOf(autoAmbulance).status, 'MAINTENANCE', 'an out-of-service vehicle must not re-enter the dispatch pool');
+  assert.equal(unitOf(replacement.ambulance_id).status, 'AVAILABLE');
+  assert.ok(!db.ambulances.some(a => a.assigned_request_id === requestId));
+}));
+
+test('no lifecycle path returns an out-of-service unit to the pool, and an accept with no usable unit says so', () => withFleetRestored(async () => {
+  const { requestId, autoAmbulance } = await acceptedCase();
+  assert.equal((await call(`/api/v1/ambulances/${autoAmbulance}/status`, tokens.paramedic, 'PATCH', { status: 'MAINTENANCE' })).status, 200);
+  const brokenStatus = () => db.ambulances.find(a => a.ambulance_id === autoAmbulance).status;
+  // Every other unit is busy or out of service too: the broken one is the only candidate the pool could hand out.
+  db.ambulances.filter(a => a.ambulance_id !== autoAmbulance && a.status === 'AVAILABLE').forEach(a => { a.status = 'IN_TRANSIT'; });
+
+  // Rejection + failover, TTL expiry, and a new accept on other cases (at H-103: earlier tests in this
+  // file leave H-101's ventilators committed).
+  const rejected = await createCase();
+  const first = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: rejected, hospital_id: 'H-103' });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal((await call(`/api/v1/referrals/${first.body.acceptance_id}/reject`, tokens.admin, 'POST', { rejection_reason: 'Full' })).status, 200);
+  for (const lock of locksFor(rejected)) await lockingEngine._handleTimeout({ ...lockingEngine._activeLocks.get(lock.acceptanceId) });
+  assert.equal(brokenStatus(), 'MAINTENANCE', 'rejection / failover / TTL expiry');
+
+  const other = await createCase();
+  const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: other, hospital_id: 'H-103' });
+  assert.equal(lock.status, 201, JSON.stringify(lock.body));
+  const accepted = await call(`/api/v1/referrals/${lock.body.acceptance_id}/accept`, tokens.admin, 'POST');
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.body.ambulance_id, null, 'the broken unit is not auto-dispatched, and no unit is claimed');
+  assert.equal(brokenStatus(), 'MAINTENANCE', 'accept');
+  const otherView = (await call(`/api/v1/emergencies/${other}`, tokens.admin)).body.request;
+  assert.deepEqual([otherView.assigned_ambulance_id, otherView.transport_required], [null, true]);
+
+  // Cancelling and completing.
+  for (const [id, status] of [[other, 'CANCELLED'], [requestId, 'COMPLETED'], [rejected, 'CANCELLED']]) {
+    assert.equal((await call(`/api/v1/emergencies/${id}/status`, tokens.admin, 'PATCH', { status })).status, 200);
+  }
+  assert.equal(brokenStatus(), 'MAINTENANCE', 'cancellation / completion');
+}));
+
 test('a hospital desk can only update ambulances stationed at its own facility', () => withFleetRestored(async () => {
   const home = db.ambulances.find(a => a.hospital_id === 'H-101');
   const denied = await call(`/api/v1/ambulances/${home.ambulance_id}/status`, tokens.desk102, 'PATCH', { status: 'MAINTENANCE' });
@@ -285,6 +361,146 @@ test('returning a matching case to the queue releases its pending lock and TTL c
 
   await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
 });
+
+test('an admin cannot move a case to MATCHING by hand: only placing a referral does that', async () => {
+  const requestId = await createCase();
+  const forced = await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'MATCHING' });
+  assert.equal(forced.status, 409);
+  assert.equal(requestOf(requestId).status, 'WAITING', 'a MATCHING case without a pending referral would be stranded');
+  await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
+});
+
+test('a failing alert write after a committed accept does not report the accept as failed', () => withFleetRestored(async () => {
+  const requestId = await createCase();
+  const initiated = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: requestId, hospital_id: 'H-101' });
+  assert.equal(initiated.status, 201);
+
+  const store = getStore();
+  const original = store.createAlert;
+  store.createAlert = async () => { throw new Error('alert table unavailable'); };
+  let accepted;
+  try {
+    accepted = await call(`/api/v1/referrals/${initiated.body.acceptance_id}/accept`, tokens.desk101, 'POST');
+  } finally {
+    store.createAlert = original;
+  }
+
+  assert.equal(requestOf(requestId).status, 'ALLOCATED', 'precondition: the allocation committed');
+  assert.equal(accepted.status, 200, 'a committed allocation must be reported as accepted, or the desk retries / gives up');
+  assert.equal(accepted.body.status, 'ACCEPTED');
+  await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
+}));
+
+// ── Retried accept (the first response was lost after the commit) ──────────
+const acceptCall = (acceptanceId, token) => call(`/api/v1/referrals/${acceptanceId}/accept`, token, 'POST');
+const committedAudits = id => auditTypes(id).filter(type => type === 'ALLOCATION_COMMITTED').length;
+
+test('a retried accept replays the committed allocation and re-applies nothing', () => withFleetRestored(async () => {
+  const requestId = await createCase();
+  const initiated = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: requestId, hospital_id: 'H-101' });
+  assert.equal(initiated.status, 201);
+  const acceptanceId = initiated.body.acceptance_id;
+
+  const first = await acceptCall(acceptanceId, tokens.desk101);
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get('idempotent-replayed'), null);
+  assert.ok(first.body.ambulance_id, 'precondition: accept dispatched a unit');
+
+  const state = () => ({
+    resources: snapshot('H-101'),
+    allocations: db.resourceAllocations.filter(a => a.request_id === requestId).map(a => `${a.resource_id}:${a.status}`),
+    units: db.ambulances.filter(a => a.assigned_request_id === requestId).map(a => `${a.ambulance_id}:${a.status}`),
+    audit: auditTypes(requestId),
+    acceptance: { ...db.hospitalAcceptances.find(a => a.acceptance_id === acceptanceId) }
+  });
+  const before = state();
+  let events = 0;
+  const onCommit = () => { events += 1; };
+  lockingEngine.on('allocation_committed', onCommit);
+  let retries;
+  try {
+    retries = await Promise.all([tokens.desk101, tokens.desk101, tokens.admin].map(token => acceptCall(acceptanceId, token)));
+  } finally {
+    lockingEngine.off('allocation_committed', onCommit);
+  }
+
+  for (const retry of retries) {
+    assert.equal(retry.status, 200, retry.body.error);
+    assert.equal(retry.headers.get('idempotent-replayed'), 'true');
+    assert.deepEqual(
+      [retry.body.status, retry.body.replayed, retry.body.acceptanceId, retry.body.requestId, retry.body.hospitalId, retry.body.ambulance_id],
+      ['ACCEPTED', true, acceptanceId, requestId, 'H-101', first.body.ambulance_id]
+    );
+  }
+  assert.deepEqual(state(), before, 'no bed, ambulance, acceptance or audit change');
+  assert.equal(committedAudits(requestId), 1);
+  assert.equal(events, 0, 'no second allocation_committed event (it would raise a second hospital alert)');
+  await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
+}));
+
+test('a retried accept reports the case\'s current transport after the unit was swapped', () => withFleetRestored(async () => {
+  const { requestId, autoAmbulance } = await acceptedCase();
+  const acceptanceId = db.hospitalAcceptances.find(a => a.request_id === requestId && a.status === 'ACCEPTED').acceptance_id;
+
+  assert.equal((await call(`/api/v1/ambulances/${autoAmbulance}/status`, tokens.paramedic, 'PATCH', { status: 'MAINTENANCE' })).status, 200);
+  const stranded = await acceptCall(acceptanceId, tokens.desk101);
+  assert.equal(stranded.status, 200);
+  assert.deepEqual([stranded.body.replayed, stranded.body.ambulance_id], [true, null], 'an out-of-service unit is not reported as the transport');
+
+  const replacement = freeAmbulance();
+  assert.equal((await call(`/api/v1/ambulances/${replacement.ambulance_id}/status`, tokens.paramedic, 'PATCH',
+    { status: 'DISPATCHED', request_id: requestId })).status, 200);
+  const retried = await acceptCall(acceptanceId, tokens.desk101);
+  assert.equal(retried.status, 200);
+  assert.deepEqual([retried.body.replayed, retried.body.ambulance_id], [true, replacement.ambulance_id]);
+  assert.deepEqual(db.ambulances.filter(a => a.assigned_request_id === requestId).map(a => a.ambulance_id), [replacement.ambulance_id]);
+  assert.equal(db.ambulances.find(a => a.ambulance_id === autoAmbulance).status, 'MAINTENANCE');
+  assert.equal(committedAudits(requestId), 1);
+  await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' });
+}));
+
+test('only the referral holding the allocation replays, only for its own hospital, only while the case is active', () => withFleetRestored(async () => {
+  const requestId = await createCase();
+  // A referral to H-103 that was withdrawn (re-queued) before the case was placed at H-101.
+  const earlier = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: requestId, hospital_id: 'H-103' });
+  assert.equal(earlier.status, 201);
+  assert.equal((await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'WAITING' })).status, 200);
+  const current = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: requestId, hospital_id: 'H-101' });
+  assert.equal(current.status, 201);
+  assert.equal((await acceptCall(current.body.acceptance_id, tokens.desk101)).status, 200);
+  const resources = () => [snapshot('H-101'), snapshot('H-103')];
+  const before = resources();
+
+  // A different referral of the same (allocated) case is not a replay.
+  const superseded = await acceptCall(earlier.body.acceptance_id, tokens.admin);
+  assert.equal(superseded.status, 409);
+  assert.equal(superseded.body.replayed, undefined);
+  // Another hospital's desk cannot replay the accept.
+  assert.equal((await acceptCall(current.body.acceptance_id, tokens.desk102)).status, 403);
+  // A record claiming the case was also accepted elsewhere makes neither referral replayable.
+  const earlierRecord = db.hospitalAcceptances.find(a => a.acceptance_id === earlier.body.acceptance_id);
+  const earlierStatus = earlierRecord.status;
+  earlierRecord.status = 'ACCEPTED';
+  try {
+    const conflicting = await acceptCall(earlier.body.acceptance_id, tokens.admin);
+    assert.equal(conflicting.status, 409);
+    assert.match(conflicting.body.error, /does not hold the allocation/);
+    assert.equal((await acceptCall(current.body.acceptance_id, tokens.desk101)).status, 409);
+  } finally {
+    earlierRecord.status = earlierStatus;
+  }
+  assert.deepEqual(resources(), before);
+  assert.equal(committedAudits(requestId), 1);
+
+  // Once the case is closed a late retry is refused and commits nothing again.
+  assert.equal((await call(`/api/v1/emergencies/${requestId}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' })).status, 200);
+  const late = await acceptCall(current.body.acceptance_id, tokens.desk101);
+  assert.equal(late.status, 409);
+  assert.match(late.body.error, /CANCELLED/);
+  assert.ok(!db.resourceAllocations.some(a => a.request_id === requestId && a.status === 'COMMITTED'));
+  assert.ok(!db.ambulances.some(a => a.assigned_request_id === requestId));
+  assert.equal(committedAudits(requestId), 1);
+}));
 
 test('failover refuses a request that has already moved past matching', async () => {
   const requestId = await createCase();

@@ -182,13 +182,18 @@ if (skip) {
     assert.deepEqual(events, ['LOCK_ACQUIRED', 'ALLOCATION_COMMITTED']);
   });
 
-  test('two concurrent accepts of the same lock: one wins, capacity and ambulance are consumed once', async () => {
+  test('concurrent accepts of the same lock: one commits, the rest replay it; capacity and ambulance are consumed once', async () => {
     const id = await makeRequest();
     const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
-    const results = await Promise.allSettled([1, 2, 3, 4, 5].map(() => engine.commitAllocation(lock.acceptanceId)));
+    let events = 0;
+    const onCommit = () => { events += 1; };
+    engine.on('allocation_committed', onCommit);
+    const results = await Promise.all([1, 2, 3, 4, 5].map(() => engine.commitAllocation(lock.acceptanceId))).finally(() => engine.off('allocation_committed', onCommit));
 
-    assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
-    assert.ok(results.filter(r => r.status === 'rejected').every(r => r.reason instanceof LockError));
+    assert.equal(results.filter(r => !r.replayed).length, 1, 'exactly one accept commits');
+    assert.ok(results.every(r => r.status === 'ACCEPTED' && r.ambulance_id === results[0].ambulance_id && r.ambulance_id));
+    assert.equal(events, 1);
+    assert.equal(await count("SELECT COUNT(*) n FROM EmergencyHistory WHERE request_id = ? AND event_type = 'ALLOCATION_COMMITTED'", [id]), 1);
     assert.deepEqual(await resource('H-A', 'ICU_BED'), { available: 0, locked: 0 });
     assert.equal(await count("SELECT COUNT(*) n FROM Ambulance WHERE assigned_request_id = ?", [id]), 1);
     assert.equal(await count("SELECT COUNT(*) n FROM ResourceAllocation WHERE request_id = ? AND status = 'COMMITTED'", [id]), 1);
@@ -363,6 +368,124 @@ if (skip) {
     assert.equal(active.length, 1);
     assert.equal(active[0].acceptanceId, lock.acceptanceId);
     assert.ok(active[0].remainingSec >= 88 && active[0].remainingSec <= 90, `got ${active[0].remainingSec}`);
+  });
+
+  // ── Hospital eligibility is enforced under the lock, not only by the route ──
+  test('a CLOSED hospital cannot receive a referral, even when the caller skips the route checks', async () => {
+    const id = await makeRequest();
+    await assert.rejects(engine.acquireSoftLock('H-C', id, ['ICU_BED']), err => err instanceof LockError && /CLOSED/.test(err.message));
+    assert.deepEqual(await resource('H-C', 'ICU_BED'), { available: 5, locked: 0 });
+    assert.equal(await requestStatus(id), 'WAITING');
+  });
+
+  test('a hospital without the required specialist on duty cannot receive the referral', async () => {
+    const id = await makeRequest({ specialist: 'CARDIOLOGIST' });
+    await assert.rejects(engine.acquireSoftLock('H-B', id, ['ICU_BED']), err => err instanceof LockError && /CARDIOLOGIST/.test(err.message));
+    assert.deepEqual(await resource('H-B', 'ICU_BED'), { available: 2, locked: 0 });
+    assert.ok(await engine.acquireSoftLock('H-A', id, ['ICU_BED']), 'H-A has its cardiologist on duty');
+  });
+
+  test('a referral racing an in-flight hospital closure waits for it and is then refused', async () => {
+    const id = await makeRequest();
+    const closer = await pool.getConnection();
+    try {
+      await closer.beginTransaction();
+      await closer.query("UPDATE Hospital SET emergency_status = 'CLOSED' WHERE hospital_id = 'H-D'");
+
+      let settled = false;
+      const pending = engine.acquireSoftLock('H-D', id, ['ICU_BED']).finally(() => { settled = true; });
+      const outcome = pending.then(() => 'granted', err => err.message);
+      await sleep(400);
+      assert.equal(settled, false, 'the referral must wait for the closure, not read around it');
+
+      await closer.commit();
+      assert.match(await outcome, /CLOSED/);
+    } finally {
+      closer.release();
+    }
+    assert.deepEqual(await resource('H-D', 'ICU_BED'), { available: 3, locked: 0 });
+  });
+
+  // ── Failover after a committed rejection / expiry ─────────────────────────
+  // The rejection commits first and failover runs afterwards, in its own transactions. Whatever happens
+  // in between (a crash, a lost connection, a competing referral) must leave a valid, recoverable state.
+  test('a failover that dies after the rejection committed leaves the case re-queued, not stuck in MATCHING', async () => {
+    const id = await makeRequest();
+    const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
+    const original = engine._failover;
+    engine._failover = async () => { throw new Error('connection lost'); };
+    const originalError = console.error;
+    console.error = () => {};
+    let result;
+    try {
+      result = await engine.rejectAndFailover(lock.acceptanceId, 'No capacity');
+    } finally {
+      engine._failover = original;
+      console.error = originalError;
+    }
+
+    assert.equal(result.status, 'REJECTED', 'the rejection is committed, so it must be reported as such');
+    assert.equal(result.next_acceptance_id, null);
+    assert.equal(await requestStatus(id), 'WAITING', 'no pending referral, so the case is back in the queue');
+    assert.deepEqual(await resource('H-A', 'ICU_BED'), { available: 1, locked: 0 });
+  });
+
+  test('a referral placed while failover is running is not overwritten back to WAITING', async () => {
+    const id = await makeRequest();
+    const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
+    const original = engine._failover;
+    // A paramedic re-initiates at H-B in the window between the rejection commit and the failover.
+    engine._failover = async (...args) => {
+      await engine.acquireSoftLock('H-B', id, ['ICU_BED']);
+      return original.apply(engine, args);
+    };
+    try {
+      await engine.rejectAndFailover(lock.acceptanceId, 'No capacity');
+    } finally {
+      engine._failover = original;
+    }
+
+    assert.equal(await count("SELECT COUNT(*) n FROM HospitalAcceptance WHERE request_id = ? AND status = 'PENDING'", [id]), 1);
+    assert.equal(await requestStatus(id), 'MATCHING', 'a case with a pending referral must be MATCHING');
+  });
+
+  test('an expiry whose failover dies leaves the case re-queued, and the sweeper still counts it', async () => {
+    const id = await makeRequest();
+    const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
+    await admin.query('UPDATE HospitalAcceptance SET lock_expires_at = NOW() - INTERVAL 5 SECOND WHERE acceptance_id = ?', [lock.acceptanceId]);
+    const original = engine._failover;
+    engine._failover = async () => { throw new Error('connection lost'); };
+    const originalError = console.error;
+    console.error = () => {};
+    let expired;
+    try {
+      expired = await engine.expireStaleLocks();
+    } finally {
+      engine._failover = original;
+      console.error = originalError;
+    }
+    assert.equal(expired, 1);
+    assert.equal(await requestStatus(id), 'WAITING');
+    assert.equal((await one('SELECT status FROM HospitalAcceptance WHERE acceptance_id = ?', [lock.acceptanceId])).status, 'EXPIRED');
+  });
+
+  test('MATCHING is only reachable by placing a referral, never by a manual transition', async () => {
+    const id = await makeRequest();
+    await assert.rejects(engine.transitionRequest(id, 'MATCHING'), /Invalid lifecycle transition/);
+    assert.equal(await requestStatus(id), 'WAITING');
+  });
+
+  test('the sweeper re-queues a case stranded in MATCHING with no pending referral, and leaves real ones alone', async () => {
+    const stranded = await makeRequest({ status: 'MATCHING' }); // e.g. left by a crash before this fix
+    const live = await makeRequest();
+    await engine.acquireSoftLock('H-A', live, ['ICU_BED']);
+
+    assert.equal(await engine.requeueStrandedRequests(), 1);
+    assert.equal(await requestStatus(stranded), 'WAITING');
+    assert.equal(await requestStatus(live), 'MATCHING');
+    const audit = await one('SELECT event_type, previous_state, new_state FROM EmergencyHistory WHERE request_id = ? ORDER BY history_id DESC LIMIT 1', [stranded]);
+    assert.deepEqual({ ...audit }, { event_type: 'STRANDED_MATCHING_REQUEUED', previous_state: 'MATCHING', new_state: 'WAITING' });
+    assert.equal(await engine.requeueStrandedRequests(), 0, 'idempotent');
   });
 
   // ── Listener failures after commit ────────────────────────────────────────
