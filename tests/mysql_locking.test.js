@@ -182,13 +182,18 @@ if (skip) {
     assert.deepEqual(events, ['LOCK_ACQUIRED', 'ALLOCATION_COMMITTED']);
   });
 
-  test('two concurrent accepts of the same lock: one wins, capacity and ambulance are consumed once', async () => {
+  test('concurrent accepts of the same lock: one commits, the rest replay it; capacity and ambulance are consumed once', async () => {
     const id = await makeRequest();
     const lock = await engine.acquireSoftLock('H-A', id, ['ICU_BED']);
-    const results = await Promise.allSettled([1, 2, 3, 4, 5].map(() => engine.commitAllocation(lock.acceptanceId)));
+    let events = 0;
+    const onCommit = () => { events += 1; };
+    engine.on('allocation_committed', onCommit);
+    const results = await Promise.all([1, 2, 3, 4, 5].map(() => engine.commitAllocation(lock.acceptanceId))).finally(() => engine.off('allocation_committed', onCommit));
 
-    assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
-    assert.ok(results.filter(r => r.status === 'rejected').every(r => r.reason instanceof LockError));
+    assert.equal(results.filter(r => !r.replayed).length, 1, 'exactly one accept commits');
+    assert.ok(results.every(r => r.status === 'ACCEPTED' && r.ambulance_id === results[0].ambulance_id && r.ambulance_id));
+    assert.equal(events, 1);
+    assert.equal(await count("SELECT COUNT(*) n FROM EmergencyHistory WHERE request_id = ? AND event_type = 'ALLOCATION_COMMITTED'", [id]), 1);
     assert.deepEqual(await resource('H-A', 'ICU_BED'), { available: 0, locked: 0 });
     assert.equal(await count("SELECT COUNT(*) n FROM Ambulance WHERE assigned_request_id = ?", [id]), 1);
     assert.equal(await count("SELECT COUNT(*) n FROM ResourceAllocation WHERE request_id = ? AND status = 'COMMITTED'", [id]), 1);

@@ -96,9 +96,13 @@ router.post('/:acceptanceId/accept',
       // commit and outside this response: a failing alert write must not turn an accept into an error.
       const result = await store.commitReferral(req.params.acceptanceId, req.user.user_id);
 
+      // A retry of an accept that already committed reports that same allocation (nothing is re-applied).
+      if (result.replayed) res.set('Idempotent-Replayed', 'true');
       res.json({
         success: true,
-        message: `Referral accepted. Resources atomically committed; EMS dispatch can now be assigned.`,
+        message: result.replayed
+          ? 'Referral was already accepted. Returning the committed allocation; nothing was changed.'
+          : `Referral accepted. Resources atomically committed; EMS dispatch can now be assigned.`,
         ...result
       });
     } catch (err) {

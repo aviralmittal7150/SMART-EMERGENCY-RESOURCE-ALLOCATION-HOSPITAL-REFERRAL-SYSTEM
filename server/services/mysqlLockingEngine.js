@@ -17,7 +17,7 @@
 
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
-import { ALLOWED_TRANSITIONS, TERMINAL_STATES, MATCHING_STATES } from './lifecycle.js';
+import { ALLOWED_TRANSITIONS, TERMINAL_STATES, MATCHING_STATES, ON_ROAD_AMBULANCE_STATUSES } from './lifecycle.js';
 
 export const SOFT_LOCK_TTL_SEC = 90;
 const VALID_RESOURCE_TYPES = ['ICU_BED', 'VENTILATOR', 'OT'];
@@ -263,6 +263,8 @@ export class MySqlLockingEngine extends EventEmitter {
   async commitAllocation(acceptanceId, actorId = 'HOSPITAL_DESK') {
     const outcome = await this._tx(async conn => {
       const ctx = await this._lockRequestAndAcceptance(conn, acceptanceId);
+      // A retry whose first response was lost: report the committed outcome, change nothing.
+      if (ctx?.acceptanceStatus === 'ACCEPTED') return { replay: await this._acceptedOutcome(conn, acceptanceId, ctx) };
       if (!ctx || ctx.acceptanceStatus !== 'PENDING') {
         throw new LockError(`No active lock found for acceptance ${acceptanceId}`);
       }
@@ -316,12 +318,39 @@ export class MySqlLockingEngine extends EventEmitter {
       return { result: { acceptanceId, requestId, hospitalId, status: 'ACCEPTED', ambulance_id: ambulanceId } };
     });
 
+    if (outcome.replay) return outcome.replay;
     if (outcome.refused) {
       this._notify('lock_released', { ...outcome.cancelled, status: 'CANCELLED', reason: outcome.refused });
       throw new LockError(outcome.refused);
     }
     this._notify('allocation_committed', outcome.result);
     return outcome.result;
+  }
+
+  /**
+   * Outcome of an already-accepted referral, for a retried accept. Only the referral that still holds
+   * the case's allocation qualifies; the ambulance is the case's current on-road unit (a replacement,
+   * if the original was swapped). Read-only: no allocation, assignment, audit row or event.
+   */
+  async _acceptedOutcome(conn, acceptanceId, { requestId, hospitalId, requestStatus }) {
+    if (!['ALLOCATED', 'IN_TREATMENT'].includes(requestStatus)) {
+      throw new LockError(`Referral ${acceptanceId} was accepted, but request ${requestId} is now ${requestStatus}.`);
+    }
+    const [holders] = await conn.query(
+      "SELECT DISTINCT hospital_id FROM ResourceAllocation WHERE request_id = ? AND status = 'COMMITTED'", [requestId]
+    );
+    const [others] = await conn.query(
+      "SELECT 1 FROM HospitalAcceptance WHERE request_id = ? AND status = 'ACCEPTED' AND acceptance_id <> ? LIMIT 1",
+      [requestId, acceptanceId]
+    );
+    if (others.length || holders.length !== 1 || holders[0].hospital_id !== hospitalId) {
+      throw new LockError(`Referral ${acceptanceId} does not hold the allocation for request ${requestId}.`);
+    }
+    const [units] = await conn.query(
+      'SELECT ambulance_id FROM Ambulance WHERE assigned_request_id = ? AND status IN (?) ORDER BY ambulance_id LIMIT 1',
+      [requestId, ON_ROAD_AMBULANCE_STATUSES]
+    );
+    return { acceptanceId, requestId, hospitalId, status: 'ACCEPTED', ambulance_id: units[0]?.ambulance_id || null, replayed: true };
   }
 
   async _cancelAcceptance(conn, acceptanceId, requestId, hospitalId, reason) {

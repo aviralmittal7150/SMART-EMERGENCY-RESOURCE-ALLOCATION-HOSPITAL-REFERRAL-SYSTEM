@@ -66,7 +66,7 @@ if (handle.skip) {
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: body && JSON.stringify(body)
     });
-    return { status: response.status, body: await response.json().catch(() => null) };
+    return { status: response.status, headers: response.headers, body: await response.json().catch(() => null) };
   };
 
   async function login(call, username, password) {
@@ -448,6 +448,112 @@ if (handle.skip) {
     } finally {
       await store.close();
     }
+  });
+
+  // ── Retried accept (the first response was lost after the commit) ────────
+  const acceptCall = (acceptanceId, token) => call(`/api/v1/referrals/${acceptanceId}/accept`, token, 'POST');
+  const referralState = async requestId => ({
+    resources: await sql("SELECT resource_id, available_capacity, locked_capacity FROM MedicalResource WHERE hospital_id IN ('H-102', 'H-103') ORDER BY resource_id"),
+    allocations: await sql('SELECT allocation_id, status FROM ResourceAllocation WHERE request_id = ? ORDER BY allocation_id', [requestId]),
+    units: await sql('SELECT ambulance_id, status FROM Ambulance WHERE assigned_request_id = ? ORDER BY ambulance_id', [requestId]),
+    acceptances: await sql('SELECT acceptance_id, status, responded_at FROM HospitalAcceptance WHERE request_id = ? ORDER BY acceptance_id', [requestId]),
+    history: await count('SELECT COUNT(*) AS n FROM EmergencyHistory WHERE request_id = ?', [requestId]),
+    alerts: await count('SELECT COUNT(*) AS n FROM Alert WHERE request_id = ?', [requestId])
+  });
+  const committedAudits = requestId => count("SELECT COUNT(*) AS n FROM EmergencyHistory WHERE request_id = ? AND event_type = 'ALLOCATION_COMMITTED'", [requestId]);
+  // The hospital alert is written by the server's post-commit listener, which can finish after the accept responds.
+  async function waitForAlert(requestId, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (await count('SELECT COUNT(*) AS n FROM Alert WHERE request_id = ?', [requestId]) < 1) {
+      assert.ok(Date.now() < deadline, `no alert recorded for ${requestId} within ${timeoutMs} ms of the accept`);
+      await sleep(50);
+    }
+  }
+
+  test('a retried accept replays the committed allocation over HTTP and re-applies nothing', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Accept Retry');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    assert.equal(lock.status, 201);
+    const first = await acceptCall(lock.body.acceptance_id, tokens.desk103);
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get('idempotent-replayed'), null);
+    assert.ok(first.body.ambulance_id, 'precondition: accept dispatched a unit');
+    await waitForAlert(id);
+    const before = await referralState(id);
+
+    const retries = await Promise.all([tokens.desk103, tokens.desk103, tokens.admin].map(token => acceptCall(lock.body.acceptance_id, token)));
+    for (const retry of retries) {
+      assert.equal(retry.status, 200, JSON.stringify(retry.body));
+      assert.equal(retry.headers.get('idempotent-replayed'), 'true');
+      assert.deepEqual(
+        [retry.body.status, retry.body.replayed, retry.body.acceptanceId, retry.body.requestId, retry.body.hospitalId, retry.body.ambulance_id],
+        ['ACCEPTED', true, lock.body.acceptance_id, id, 'H-103', first.body.ambulance_id]
+      );
+    }
+    assert.deepEqual(await referralState(id), before, 'no capacity, allocation, ambulance, acceptance, history or alert change');
+    assert.equal(await committedAudits(id), 1);
+  });
+
+  test('a retried accept reports the case\'s current transport after the unit was swapped', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Accept Retry Swap');
+    const lock = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    const original = (await acceptCall(lock.body.acceptance_id, tokens.desk103)).body.ambulance_id;
+    assert.ok(original);
+
+    assert.equal((await call(`/api/v1/ambulances/${original}/status`, tokens.admin, 'PATCH', { status: 'MAINTENANCE' })).status, 200);
+    const stranded = await acceptCall(lock.body.acceptance_id, tokens.desk103);
+    assert.equal(stranded.status, 200);
+    assert.deepEqual([stranded.body.replayed, stranded.body.ambulance_id], [true, null], 'an out-of-service unit is not reported as the transport');
+
+    const { ambulance_id: replacement } = await sqlOne("SELECT ambulance_id FROM Ambulance WHERE status = 'AVAILABLE' ORDER BY ambulance_id LIMIT 1");
+    const dispatched = await call(`/api/v1/ambulances/${replacement}/status`, tokens.admin, 'PATCH', { status: 'DISPATCHED', request_id: id });
+    assert.equal(dispatched.status, 200, JSON.stringify(dispatched.body));
+    const retried = await acceptCall(lock.body.acceptance_id, tokens.desk103);
+    assert.equal(retried.status, 200);
+    assert.deepEqual([retried.body.replayed, retried.body.ambulance_id], [true, replacement]);
+    assert.deepEqual((await sql('SELECT ambulance_id FROM Ambulance WHERE assigned_request_id = ?', [id])).map(r => r.ambulance_id), [replacement]);
+    assert.equal((await sqlOne('SELECT status FROM Ambulance WHERE ambulance_id = ?', [original])).status, 'MAINTENANCE');
+    assert.equal(await committedAudits(id), 1);
+  });
+
+  test('only the referral holding the allocation replays, only for its own hospital, only while the case is active', async () => {
+    const id = await createCase(call, tokens.paramedic, 'RESPIRATORY', 'Fictional Accept Retry Conflict');
+    // A referral to H-102 that was withdrawn (re-queued) before the case was placed at H-103.
+    const earlier = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-102' });
+    assert.equal(earlier.status, 201);
+    assert.equal((await call(`/api/v1/emergencies/${id}/status`, tokens.admin, 'PATCH', { status: 'WAITING' })).status, 200);
+    const current = await call('/api/v1/referrals/initiate', tokens.paramedic, 'POST', { request_id: id, hospital_id: 'H-103' });
+    assert.equal(current.status, 201);
+    assert.equal((await acceptCall(current.body.acceptance_id, tokens.desk103)).status, 200);
+    await waitForAlert(id);
+    const before = await referralState(id);
+
+    // A different referral of the same (allocated) case is not a replay.
+    const superseded = await acceptCall(earlier.body.acceptance_id, tokens.admin);
+    assert.equal(superseded.status, 409);
+    assert.equal(superseded.body.replayed, undefined);
+    // Another hospital's desk (here, the earlier referral's) cannot replay the accept.
+    assert.equal((await acceptCall(current.body.acceptance_id, tokens.desk102)).status, 403);
+    assert.deepEqual(await referralState(id), before);
+
+    // A record claiming the case was also accepted elsewhere makes neither referral replayable.
+    const { status: earlierStatus } = await sqlOne('SELECT status FROM HospitalAcceptance WHERE acceptance_id = ?', [earlier.body.acceptance_id]);
+    await sql("UPDATE HospitalAcceptance SET status = 'ACCEPTED' WHERE acceptance_id = ?", [earlier.body.acceptance_id]);
+    const conflicting = await acceptCall(earlier.body.acceptance_id, tokens.admin);
+    assert.equal(conflicting.status, 409);
+    assert.match(conflicting.body.error, /does not hold the allocation/);
+    assert.equal((await acceptCall(current.body.acceptance_id, tokens.desk103)).status, 409);
+    await sql('UPDATE HospitalAcceptance SET status = ? WHERE acceptance_id = ?', [earlierStatus, earlier.body.acceptance_id]);
+    assert.deepEqual(await referralState(id), before);
+
+    // Once the case is closed a late retry is refused and commits nothing again.
+    assert.equal((await call(`/api/v1/emergencies/${id}/status`, tokens.admin, 'PATCH', { status: 'CANCELLED' })).status, 200);
+    const late = await acceptCall(current.body.acceptance_id, tokens.desk103);
+    assert.equal(late.status, 409);
+    assert.match(late.body.error, /CANCELLED/);
+    assert.equal(await count("SELECT COUNT(*) AS n FROM ResourceAllocation WHERE request_id = ? AND status IN ('LOCKED', 'COMMITTED')", [id]), 0);
+    assert.equal(await count('SELECT COUNT(*) AS n FROM Ambulance WHERE assigned_request_id = ?', [id]), 0);
+    assert.equal(await committedAudits(id), 1);
   });
 
   // ── Authorization boundaries (MySQL mode) ─────────────────────────────────
