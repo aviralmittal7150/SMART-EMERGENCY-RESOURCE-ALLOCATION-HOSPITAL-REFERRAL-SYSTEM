@@ -3,6 +3,7 @@
 // This module provides an in-memory DBMS simulation with SELECT...FOR UPDATE semantics
 
 import { EventEmitter } from 'events';
+import { noteLockAcquired, noteLockReleased } from '../services/lockOrder.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // In-Memory DBMS Store — mirrors the MySQL schema tables
@@ -121,36 +122,56 @@ class InMemoryStore extends EventEmitter {
     // ── Alerts ──
     this.alerts = [];
 
-    // ── Mutex Lock Map (resource_id -> locked boolean) — OS Mutual Exclusion ──
-    this._locks = new Map();
-    this._lockQueue = new Map();
+    // ── Row mutexes (resource_id -> { held, waiters[] }) — OS Mutual Exclusion ──
+    this._mutexes = new Map();
   }
 
   // ──────────────────────────────────────────────────
   // MUTEX — Simulate SELECT ... FOR UPDATE
+  // Arrival-ordered (FIFO): waiters are granted strictly in the order they asked, and a release hands
+  // ownership directly to the next waiter, so a newcomer can never barge past a queued request.
+  // The returned release function is idempotent: a second call can never free a lock that has
+  // already been handed to someone else. A waiter that times out leaves the queue without the lock.
   // ──────────────────────────────────────────────────
   async acquireResourceLock(resourceId, timeoutMs = 5000) {
-    if (!this._locks.has(resourceId)) {
-      this._locks.set(resourceId, false);
+    let mutex = this._mutexes.get(resourceId);
+    if (!mutex) {
+      mutex = { held: false, waiters: [] };
+      this._mutexes.set(resourceId, mutex);
+    }
+    const lockKey = this.medicalResources.find(r => r.resource_id === resourceId)?.resource_type ?? resourceId;
+
+    if (mutex.held) {
+      // Wait for a releaser to hand the lock over (`held` stays true across the hand-over).
+      await new Promise((resolve, reject) => {
+        const waiter = {
+          grant: () => {
+            clearTimeout(waiter.timer);
+            resolve();
+          }
+        };
+        waiter.timer = setTimeout(() => {
+          const index = mutex.waiters.indexOf(waiter);
+          if (index >= 0) mutex.waiters.splice(index, 1);
+          reject(new Error(`Lock timeout on ${resourceId}`));
+        }, timeoutMs);
+        mutex.waiters.push(waiter);
+      });
+    } else {
+      mutex.held = true;
     }
 
-    return new Promise((resolve, reject) => {
-      const startedAt = Date.now();
-      const tryAcquire = () => {
-        if (!this._locks.get(resourceId)) {
-          this._locks.set(resourceId, true);
-          resolve(() => this._locks.set(resourceId, false));
-          return;
-        }
-
-        if (Date.now() - startedAt >= timeoutMs) {
-          reject(new Error(`Lock timeout on ${resourceId}`));
-          return;
-        }
-        setTimeout(tryAcquire, 10);
-      };
-      tryAcquire();
-    });
+    // Recorded here, in the acquirer's own async context (not the releaser's).
+    noteLockAcquired('MedicalResource', lockKey);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      noteLockReleased('MedicalResource', lockKey);
+      const next = mutex.waiters.shift();
+      if (next) next.grant(); // ownership passes straight to the next waiter
+      else mutex.held = false;
+    };
   }
 
   // Append to immutable audit log

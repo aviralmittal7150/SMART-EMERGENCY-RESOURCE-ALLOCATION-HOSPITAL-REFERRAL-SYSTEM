@@ -18,6 +18,7 @@
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import { ALLOWED_TRANSITIONS, TERMINAL_STATES, MATCHING_STATES, ON_ROAD_AMBULANCE_STATUSES } from './lifecycle.js';
+import { ExecutionHooks } from './executionHooks.js';
 
 export const SOFT_LOCK_TTL_SEC = 90;
 const VALID_RESOURCE_TYPES = ['ICU_BED', 'VENTILATOR', 'OT'];
@@ -36,13 +37,22 @@ export class LockError extends Error {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export class MySqlLockingEngine extends EventEmitter {
-  constructor({ pool }) {
+  constructor({ pool, hooks = new ExecutionHooks() }) {
     super();
     if (!pool) throw new Error('MySqlLockingEngine requires a mysql2 pool.');
     this.pool = pool;
+    // Test-only pause points (see executionHooks.js). Inactive unless a test installs a handler.
+    this.hooks = hooks;
+  }
+
+  /** Pause at a named point if a test installed a handler there (no-op otherwise). */
+  async _pause(point, context) {
+    if (this.hooks.active(point)) await this.hooks.run(point, { backend: 'mysql', ...context });
   }
 
   // ── Transaction helper ─────────────────────────────────────────────────────
+  // Each attempt is a fresh transaction on a fresh connection: `work(conn)` is re-run from scratch,
+  // so nothing computed by a rolled-back attempt (rows read, audit entries queued) survives into the next.
   async _tx(work) {
     for (let attempt = 0; ; attempt += 1) {
       const conn = await this.pool.getConnection();
@@ -54,7 +64,9 @@ export class MySqlLockingEngine extends EventEmitter {
         await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         await conn.beginTransaction();
         conn.pendingAudits = [];
+        conn.txAttempt = attempt;
         const result = await work(conn);
+        await this._pause('tx:beforeCommit', { attempt });
         await conn.commit();
         // Audit events are announced only once their transaction is durable.
         conn.pendingAudits.forEach(entry => this._notify('audit', entry));
@@ -62,6 +74,7 @@ export class MySqlLockingEngine extends EventEmitter {
       } catch (err) {
         try { await conn.rollback(); } catch { /* connection may already be gone */ }
         if (err.errno === ER_LOCK_DEADLOCK && attempt < DEADLOCK_RETRIES) {
+          await this._pause('tx:deadlockRetry', { attempt, errno: err.errno });
           await sleep(10 * 2 ** attempt + Math.floor(Math.random() * 10));
           continue;
         }
@@ -129,6 +142,7 @@ export class MySqlLockingEngine extends EventEmitter {
   //    Lock order: EmergencyRequest -> HospitalAcceptance -> Hospital (shared) -> Doctor (shared)
   //    -> MedicalResource (sorted by type). Other writers of Hospital / Doctor hold only that one row.
     const [requests] = await conn.query('SELECT status, required_specialist FROM EmergencyRequest WHERE request_id = ? FOR UPDATE', [requestId]);
+    await this._pause('acquire:requestLocked', { requestId, hospitalId, attempt: conn.txAttempt });
     if (!requests.length) throw new LockError(`Emergency request ${requestId} not found.`, 'NOT_FOUND');
     const { status, required_specialist: specialist } = requests[0];
     if (!MATCHING_STATES.includes(status)) {
@@ -263,6 +277,7 @@ export class MySqlLockingEngine extends EventEmitter {
   async commitAllocation(acceptanceId, actorId = 'HOSPITAL_DESK') {
     const outcome = await this._tx(async conn => {
       const ctx = await this._lockRequestAndAcceptance(conn, acceptanceId);
+      await this._pause('commit:requestLocked', { requestId: ctx?.requestId, acceptanceId, attempt: conn.txAttempt });
       // A retry whose first response was lost: report the committed outcome, change nothing.
       if (ctx?.acceptanceStatus === 'ACCEPTED') return { replay: await this._acceptedOutcome(conn, acceptanceId, ctx) };
       if (!ctx || ctx.acceptanceStatus !== 'PENDING') {
@@ -369,6 +384,7 @@ export class MySqlLockingEngine extends EventEmitter {
   async rejectAndFailover(acceptanceId, rejectionReason = 'Hospital rejected referral', actorId = 'HOSPITAL_DESK') {
     const released = await this._tx(async conn => {
       const ctx = await this._lockRequestAndAcceptance(conn, acceptanceId);
+      await this._pause('reject:requestLocked', { requestId: ctx?.requestId, acceptanceId, attempt: conn.txAttempt });
       if (!ctx || ctx.acceptanceStatus !== 'PENDING') throw new LockError(`No active lock for ${acceptanceId}`);
       const types = await this._releaseSoftLocks(conn, ctx.requestId, ctx.hospitalId);
       await conn.query(
@@ -463,6 +479,7 @@ export class MySqlLockingEngine extends EventEmitter {
   async expireLock(acceptanceId) {
     const outcome = await this._tx(async conn => {
       const ctx = await this._lockRequestAndAcceptance(conn, acceptanceId);
+      await this._pause('expire:requestLocked', { requestId: ctx?.requestId, acceptanceId, attempt: conn.txAttempt });
       if (!ctx || ctx.acceptanceStatus !== 'PENDING' || !ctx.expired) return null;
       const types = await this._releaseSoftLocks(conn, ctx.requestId, ctx.hospitalId);
       await conn.query(
@@ -594,6 +611,8 @@ export class MySqlLockingEngine extends EventEmitter {
         throw new LockError(`Invalid lifecycle transition: ${previous} -> ${newStatus}.`, 'INVALID_TRANSITION');
       }
       await conn.query('UPDATE EmergencyRequest SET status = ? WHERE request_id = ?', [newStatus, requestId]);
+      // The request row is locked and its new status written (not yet committed).
+      await this._pause('transition:statusRecorded', { requestId, previous, newStatus, attempt: conn.txAttempt });
 
       const terminal = TERMINAL_STATES.includes(newStatus);
       let cancelled = [];

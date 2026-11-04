@@ -316,6 +316,11 @@ export class MemoryStore extends EventEmitter {
     }
     request.status = newStatus;
     request.updated_at = new Date().toISOString();
+    // Test-only pause point, at an await this method already has below (no extra interleaving otherwise).
+    const hooks = this.lockingEngine.hooks;
+    if (hooks?.active('transition:statusRecorded')) {
+      await hooks.run('transition:statusRecorded', { backend: 'memory', requestId, previous, newStatus });
+    }
 
     let lockCleanupError = null;
     const isTerminal = TERMINAL_STATES.includes(newStatus);
