@@ -4,7 +4,8 @@
 -- 10 Normalized Tables with Foreign Keys, Indexes & ACID Support
 -- Used by the application in MySQL mode (DB_USE_MEMORY=false) via `node server/db/init.js`,
 -- and loaded against a real MySQL server by the tests/mysql_*.test.js suites and CI.
--- Existing databases are upgraded with the additive scripts in server/db/migrations/.
+-- Existing databases are upgraded with the migration runner (`npm run db:migrate`, server/db/migrate.js),
+-- which applies the additive scripts in server/db/migrations/ in order.
 -- ============================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
@@ -238,5 +239,26 @@ CREATE TABLE IF NOT EXISTS IdempotencyKey (
   PRIMARY KEY (actor_id, endpoint, idem_key),
   INDEX idx_created (created_at)
 );
+
+-- ─────────────────────────────────────────────────────────────
+-- Table 13: SchemaMigration
+-- Bookkeeping for the migration runner (server/db/migrate.js). Identical to migrations/003.
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS SchemaMigration (
+  version            VARCHAR(100)  NOT NULL PRIMARY KEY COMMENT 'Migration file name without .sql, e.g. 001_referral_lifecycle',
+  status             ENUM('BASELINE','RUNNING','APPLIED','FAILED') NOT NULL COMMENT 'BASELINE = already present when the runner was adopted (not executed by it)',
+  checksum           CHAR(64)      NULL COMMENT 'SHA-256 of the migration file as executed (NULL for BASELINE rows)',
+  statements_applied INT           NOT NULL DEFAULT 0 COMMENT 'Statements completed so far: DDL is not transactional, so a FAILED row says exactly how far it got',
+  error_message      VARCHAR(1000) NULL,
+  recorded_at        TIMESTAMP(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+);
+
+-- This file already contains the effect of every migration below, so a database created from it records
+-- them as BASELINE (the runner then has nothing to apply). EVERY new migration file must be added here
+-- together with its schema change; tests/mysql_migration_runner.test.js fails if one is missing.
+INSERT IGNORE INTO SchemaMigration (version, status) VALUES
+  ('001_referral_lifecycle', 'BASELINE'),
+  ('002_idempotency_keys', 'BASELINE'),
+  ('003_schema_migration', 'BASELINE');
 
 SET FOREIGN_KEY_CHECKS = 1;

@@ -16,10 +16,14 @@ import { db as demoData } from './seed.js';
 const SCHEMA_PATH = fileURLToPath(new URL('./schema.sql', import.meta.url));
 
 export const SCHEMA_TABLES = ['Hospital', 'Doctor', 'MedicalResource', 'Patient', 'EmergencyRequest',
-  'HospitalAcceptance', 'ResourceAllocation', 'Ambulance', 'EmergencyHistory', 'Alert', 'SystemUser', 'IdempotencyKey'];
+  'HospitalAcceptance', 'ResourceAllocation', 'Ambulance', 'EmergencyHistory', 'Alert', 'SystemUser', 'IdempotencyKey',
+  'SchemaMigration'];
 
 /** Tables added by a later, additive migration: a database missing only these can be upgraded in place. */
-export const MIGRATED_TABLES = { IdempotencyKey: 'server/db/migrations/002_idempotency_keys.sql' };
+export const MIGRATED_TABLES = {
+  IdempotencyKey: 'server/db/migrations/002_idempotency_keys.sql',
+  SchemaMigration: '`npm run db:migrate -- --baseline <last migration already applied>` once; see server/db/migrations/README.md'
+};
 
 /** Open a dedicated connection that may run the multi-statement schema file. */
 export function connectForInit(mysqlConfig) {
@@ -30,6 +34,14 @@ export function connectForInit(mysqlConfig) {
 }
 
 export async function initializeSchema(conn) {
+  // schema.sql records every migration as already present (BASELINE). That is only true for tables it
+  // creates itself, so it must not be run over a database that predates the migration runner: on such a
+  // database it would record migrations as applied without applying them.
+  const existing = await listExistingTables(conn);
+  if (!existing.includes('SchemaMigration') && existing.some(t => SCHEMA_TABLES.includes(t))) {
+    throw new Error('This database already has project tables but no SchemaMigration table (it predates the migration runner). ' +
+      'Upgrade it with `npm run db:migrate -- --baseline <last migration already applied>` instead; see server/db/migrations/README.md.');
+  }
   await conn.query(fs.readFileSync(SCHEMA_PATH, 'utf8'));
 }
 

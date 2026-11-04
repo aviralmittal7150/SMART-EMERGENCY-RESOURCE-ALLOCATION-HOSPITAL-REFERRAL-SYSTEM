@@ -1,7 +1,8 @@
 // The additive migrations (server/db/migrations/001_referral_lifecycle.sql, 002_idempotency_keys.sql)
-// tested for real on MySQL:
-//   old schema  ->  start-up check rejects it  ->  001 + 002  ->  check passes
-//   -> structure identical to a freshly created schema, existing data untouched, engine works on it.
+// tested for real on MySQL, as they were applied by hand before the migration runner existed:
+//   old schema  ->  start-up check rejects it  ->  001 + 002  ->  runner adopted with --baseline 002
+//   -> check passes -> structure identical to a freshly created schema, data untouched, engine works on it.
+// The runner itself is tested in tests/mysql_migration_runner.test.js.
 // Runs only against the dedicated *_test database; skipped (not failed) when it is not configured,
 // and a failure in CI (REQUIRE_MYSQL_TESTS=true). All data is fictional.
 
@@ -11,12 +12,15 @@ import fs from 'node:fs';
 import { openTestDatabase } from './helpers/mysqlTestDb.js';
 import { createPool } from '../server/db/pool.js';
 import { checkSchema } from '../server/db/bootstrap.js';
-import { SCHEMA_TABLES, initializeSchema, seedDemoData } from '../server/db/init.js';
+import { SCHEMA_TABLES, MIGRATED_TABLES, initializeSchema, seedDemoData } from '../server/db/init.js';
+import { runMigrations } from '../server/db/migrate.js';
 import { MySqlLockingEngine } from '../server/services/mysqlLockingEngine.js';
 
 const read = relative => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
 const MIGRATION_002 = '../server/db/migrations/002_idempotency_keys.sql';
 const IDEMPOTENCY_MISSING = 'missing table IdempotencyKey (run server/db/migrations/002_idempotency_keys.sql)';
+// A database migrated by hand predates the runner: its bookkeeping table is missing until it is adopted.
+const RUNNER_NOT_ADOPTED = `missing table SchemaMigration (run ${MIGRATED_TABLES.SchemaMigration})`;
 const handle = await openTestDatabase();
 
 if (handle.skip) {
@@ -108,9 +112,13 @@ if (handle.skip) {
 
     // 4. Apply the real migration file.
     await admin.query(read('../server/db/migrations/001_referral_lifecycle.sql'));
-    assert.deepEqual(await checkSchema(pool), [IDEMPOTENCY_MISSING], 'after 001 only the 002 table is missing, and it is named');
+    assert.deepEqual(await checkSchema(pool), [IDEMPOTENCY_MISSING, RUNNER_NOT_ADOPTED], 'after 001 the 002 table is missing, and it is named');
     await admin.query(read(MIGRATION_002));
     await admin.query(read(MIGRATION_002)); // 002 is re-runnable
+    assert.deepEqual(await checkSchema(pool), [RUNNER_NOT_ADOPTED], 'only the runner bookkeeping is missing now');
+    // Adopt the runner: declare that 001 and 002 are already applied; it then applies 003.
+    const adopted = await runMigrations(admin, { baseline: '002' });
+    assert.deepEqual(adopted, { baselined: ['001_referral_lifecycle', '002_idempotency_keys'], applied: ['003_schema_migration'], pending: [] });
     assert.deepEqual(await checkSchema(pool), [], 'the migrated schema passes the start-up check');
 
     // 5. An upgraded database is structurally identical to a fresh one.
@@ -178,7 +186,7 @@ if (handle.skip) {
     });
     assert.deepEqual(await structure(), migrated, 'the failed re-run altered nothing');
     assert.deepEqual(await rowCounts(), counts);
-    assert.deepEqual(await checkSchema(pool), [IDEMPOTENCY_MISSING]);
+    assert.deepEqual(await checkSchema(pool), [IDEMPOTENCY_MISSING, RUNNER_NOT_ADOPTED]);
 
     // The same on a database created from the current schema.sql.
     await dropAll();
@@ -205,9 +213,11 @@ if (handle.skip) {
 
     // DDL is not transactional: statements 1 and 2 stayed applied. The start-up check names exactly what is
     // still missing, so an operator can finish by running only the remaining statements.
-    assert.deepEqual(await checkSchema(pool), [IDEMPOTENCY_MISSING, 'EmergencyHistory.request_id must allow NULL']);
+    assert.deepEqual(await checkSchema(pool), [IDEMPOTENCY_MISSING, RUNNER_NOT_ADOPTED, 'EmergencyHistory.request_id must allow NULL']);
     for (const statement of statements.slice(3)) await admin.query(statement);
     await admin.query(read(MIGRATION_002));
+    assert.deepEqual(await checkSchema(pool), [RUNNER_NOT_ADOPTED]);
+    await runMigrations(admin, { baseline: '002' });
     assert.deepEqual(await checkSchema(pool), []);
     assert.deepEqual(await rowCounts(), counts, 'no data was lost along the way');
 
