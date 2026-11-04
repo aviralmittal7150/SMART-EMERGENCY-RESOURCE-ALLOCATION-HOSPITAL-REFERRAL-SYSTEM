@@ -602,8 +602,8 @@ export class MySqlStore extends EventEmitter {
       `SELECT
          (SELECT COUNT(*) FROM EmergencyRequest WHERE status NOT IN ('COMPLETED', 'CANCELLED')) AS active_emergencies,
          (SELECT COUNT(*) FROM EmergencyRequest WHERE priority = 1 AND status = 'WAITING') AS critical_p1,
-         (SELECT COALESCE(SUM(available_capacity), 0) FROM MedicalResource WHERE resource_type = 'ICU_BED') AS icu_available,
-         (SELECT COALESCE(SUM(available_capacity), 0) FROM MedicalResource WHERE resource_type = 'VENTILATOR') AS ventilators_available,
+         (SELECT COALESCE(SUM(available_capacity - locked_capacity), 0) FROM MedicalResource WHERE resource_type = 'ICU_BED') AS icu_available,
+         (SELECT COALESCE(SUM(available_capacity - locked_capacity), 0) FROM MedicalResource WHERE resource_type = 'VENTILATOR') AS ventilators_available,
          (SELECT COUNT(*) FROM Hospital WHERE emergency_status = 'OPEN') AS hospitals_open,
          (SELECT COUNT(*) FROM Ambulance WHERE status = 'AVAILABLE') AS ambulances_available,
          (SELECT COUNT(*) FROM HospitalAcceptance WHERE status = 'PENDING') AS active_locks`

@@ -601,6 +601,7 @@ export class MySqlLockingEngine extends EventEmitter {
         cancelled = await this._cancelPending(conn, requestId, `Request ${newStatus}`);
       }
       let released = 0;
+      let capped = 0;
       if (terminal) {
         // Committed allocations go back to the hospital (sorted by type, like every other path).
         const [committed] = await conn.query(
@@ -610,8 +611,17 @@ export class MySqlLockingEngine extends EventEmitter {
           [requestId]
         );
         for (const allocation of committed) {
+          // Never above total capacity: if the hospital reduced its capacity while this unit was in use,
+          // the returned unit no longer exists and is not handed out again. The cap is recorded below.
+          const [[row]] = await conn.query(
+            'SELECT available_capacity, total_capacity FROM MedicalResource WHERE resource_id = ? FOR UPDATE',
+            [allocation.resource_id]
+          );
+          if (row && row.available_capacity >= row.total_capacity) capped += 1;
           await conn.query(
-            'UPDATE MedicalResource SET available_capacity = available_capacity + 1, version_lock = version_lock + 1 WHERE resource_id = ?',
+            `UPDATE MedicalResource SET available_capacity = LEAST(available_capacity + 1, total_capacity),
+                                        version_lock = version_lock + 1
+             WHERE resource_id = ?`,
             [allocation.resource_id]
           );
         }
@@ -628,7 +638,7 @@ export class MySqlLockingEngine extends EventEmitter {
       }
       await this._audit(conn, {
         request_id: requestId, event_type: 'STATUS_CHANGED', previous_state: previous, new_state: newStatus,
-        actor_role: actor.role, actor_id: actor.id, metadata: { released_allocations: released }
+        actor_role: actor.role, actor_id: actor.id, metadata: { released_allocations: released, capped_releases: capped }
       });
       return { previous, unchanged: false, cancelled };
     });

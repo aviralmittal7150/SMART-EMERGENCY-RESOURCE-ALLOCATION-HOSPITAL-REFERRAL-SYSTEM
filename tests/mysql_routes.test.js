@@ -613,7 +613,8 @@ if (handle.skip) {
     await call(`/api/v1/referrals/${lock.body.acceptance_id}/accept`, tokens.desk103, 'POST');
 
     const dashboard = (await call('/api/v1/analytics/dashboard', tokens.admin)).body.dashboard.kpis;
-    const icu = await sqlOne("SELECT SUM(available_capacity) AS n FROM MedicalResource WHERE resource_type = 'ICU_BED'");
+    // "available" = free units: soft-locked units are excluded (see the capacity model in routes/analytics.js).
+    const icu = await sqlOne("SELECT SUM(available_capacity - locked_capacity) AS n FROM MedicalResource WHERE resource_type = 'ICU_BED'");
     assert.equal(dashboard.icu_available, Number(icu.n));
     assert.equal(dashboard.hospitals_open + dashboard.hospitals_limited + dashboard.hospitals_closed, 6);
 
