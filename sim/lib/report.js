@@ -16,7 +16,8 @@ export function environment() {
   const cpus = os.cpus();
   return {
     gitCommit: git(['rev-parse', 'HEAD']),
-    gitDirty: (git(['status', '--porcelain']) ?? '') !== '',
+    // Uncommitted changes to anything except generated reports (sim/reports/) make a measurement suspect.
+    gitDirty: (git(['status', '--porcelain', '--', '.', ':(exclude)sim/reports']) ?? '') !== '',
     node: process.version,
     platform: `${os.platform()} ${os.release()}`,
     arch: os.arch(),
