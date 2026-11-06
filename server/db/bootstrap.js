@@ -13,9 +13,10 @@ import { configureStore } from './store.js';
 import { MemoryStore } from './memoryStore.js';
 import { MySqlStore } from './mysqlStore.js';
 import { SCHEMA_TABLES, MIGRATED_TABLES } from './init.js';
+import { migrationStatus, MIGRATIONS_DIR } from './migrate.js';
 
 /** Returns a list of human-readable problems; empty means the schema fits this version of the code. */
-export async function checkSchema(pool) {
+export async function checkSchema(pool, { migrationsDir = MIGRATIONS_DIR } = {}) {
   const problems = [];
   const [tables] = await pool.query('SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()');
   const present = new Set(tables.map(t => t.name));
@@ -44,6 +45,16 @@ export async function checkSchema(pool) {
   if (acceptanceStatus && !acceptanceStatus.type.includes("'CANCELLED'")) problems.push("HospitalAcceptance.status lacks the 'CANCELLED' value");
   const historyRequest = has('EmergencyHistory', 'request_id');
   if (historyRequest && historyRequest.nullable !== 'YES') problems.push('EmergencyHistory.request_id must allow NULL');
+
+  // Migration bookkeeping (only once the runner's table exists; its absence is reported above).
+  // The server never migrates by itself: pending, failed or edited migrations stop start-up.
+  if (present.has('SchemaMigration')) {
+    const status = await migrationStatus(pool, { dir: migrationsDir });
+    problems.push(...status.problems);
+    if (status.pending.length) {
+      problems.push(`pending migrations: ${status.pending.map(m => m.version).join(', ')} (run \`npm run db:migrate\`)`);
+    }
+  }
   return problems;
 }
 
@@ -63,7 +74,7 @@ export async function bootstrapStore(env = process.env, { log = console } = {}) 
     await pool.query('SELECT 1');
     const problems = await checkSchema(pool);
     if (problems.length) {
-      throw new Error(`Schema is out of date: ${problems.join('; ')}. See server/db/migrations/ (additive, run manually, in order).`);
+      throw new Error(`Schema is out of date: ${problems.join('; ')}. Upgrade with \`npm run db:migrate\` (see server/db/migrations/README.md).`);
     }
   } catch (err) {
     await pool.end().catch(() => {});

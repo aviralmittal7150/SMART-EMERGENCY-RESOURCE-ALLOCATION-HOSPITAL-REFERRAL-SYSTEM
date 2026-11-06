@@ -6,6 +6,8 @@ import { EventEmitter } from 'events';
 import { db } from '../db/seed.js';
 import { v4 as uuidv4 } from 'uuid';
 import { ON_ROAD_AMBULANCE_STATUSES } from './lifecycle.js';
+import { ExecutionHooks } from './executionHooks.js';
+import { memoryLockOrderActive, runInLockScope, noteLockAcquired, noteLockReleased } from './lockOrder.js';
 
 const SOFT_LOCK_TTL_MS = 90_000; // 90 seconds
 const TERMINAL_REQUEST_STATES = ['CANCELLED', 'COMPLETED'];
@@ -21,6 +23,18 @@ class LockingEngine extends EventEmitter {
     // Resource mutexes alone are insufficient because a request can reserve
     // different hospitals concurrently before either acceptance is recorded.
     this._requestLocks = new Map();
+    // Test-only pause points (see executionHooks.js). Inactive unless a test installs a handler.
+    this.hooks = new ExecutionHooks();
+  }
+
+  /**
+   * Run `operation` after the named pause point. With no handler installed this is exactly
+   * `operation()`: no extra await, so production interleavings are unchanged.
+   */
+  _hooked(point, context, operation) {
+    return this.hooks.active(point)
+      ? this.hooks.run(point, { backend: 'memory', ...context }).then(operation)
+      : operation();
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -28,7 +42,8 @@ class LockingEngine extends EventEmitter {
   // Implements mutual exclusion: only one lock per resource at a time
   // ─────────────────────────────────────────────────────────────────────────
   async acquireSoftLock(hospitalId, requestId, resourceTypes = ['ICU_BED']) {
-    return this._withRequestLock(requestId, () => this._acquireSoftLock(hospitalId, requestId, resourceTypes));
+    return this._withRequestLock(requestId, () => this._hooked('acquire:requestLocked', { requestId, hospitalId },
+      () => this._acquireSoftLock(hospitalId, requestId, resourceTypes)));
   }
 
   async _acquireSoftLock(hospitalId, requestId, resourceTypes = ['ICU_BED']) {
@@ -170,7 +185,8 @@ class LockingEngine extends EventEmitter {
       || db.hospitalAcceptances.find(a => a.acceptance_id === acceptanceId)?.request_id;
     if (!requestId) throw new Error(`No active lock found for acceptance ${acceptanceId}`);
 
-    return this._withRequestLock(requestId, () => this._commitAllocation(acceptanceId, actorId));
+    return this._withRequestLock(requestId, () => this._hooked('commit:requestLocked', { requestId, acceptanceId },
+      () => this._commitAllocation(acceptanceId, actorId)));
   }
 
   async _commitAllocation(acceptanceId, actorId = 'HOSPITAL_DESK') {
@@ -296,7 +312,9 @@ class LockingEngine extends EventEmitter {
     const lockEntry = this._activeLocks.get(acceptanceId);
     if (!lockEntry) throw new Error(`No active lock for ${acceptanceId}`);
 
-    return this._withRequestLock(lockEntry.requestId, () => this._rejectAndFailover(acceptanceId, rejectionReason, actorId));
+    return this._withRequestLock(lockEntry.requestId, () => this._hooked('reject:requestLocked',
+      { requestId: lockEntry.requestId, acceptanceId },
+      () => this._rejectAndFailover(acceptanceId, rejectionReason, actorId)));
   }
 
   async _rejectAndFailover(acceptanceId, rejectionReason = 'Hospital rejected referral', actorId = 'HOSPITAL_DESK') {
@@ -346,7 +364,9 @@ class LockingEngine extends EventEmitter {
   // P2-08: TTL Expiry Background Worker
   // ─────────────────────────────────────────────────────────────────────────
   async _handleTimeout(lockRecord) {
-    return this._withRequestLock(lockRecord.requestId, () => this._handleTimeoutLocked(lockRecord));
+    return this._withRequestLock(lockRecord.requestId, () => this._hooked('expire:requestLocked',
+      { requestId: lockRecord.requestId, acceptanceId: lockRecord.acceptanceId },
+      () => this._handleTimeoutLocked(lockRecord)));
   }
 
   async _handleTimeoutLocked(lockRecord) {
@@ -468,7 +488,7 @@ class LockingEngine extends EventEmitter {
   // COMPLETED. Releases soft-locks and never triggers failover.
   // ─────────────────────────────────────────────────────────────────────────
   async cancelPendingForRequest(requestId, reason = 'Request cancelled') {
-    return this._withRequestLock(requestId, async () => {
+    return this._withRequestLock(requestId, () => this._hooked('cancel:requestLocked', { requestId }, async () => {
       const cancelled = [];
       const failures = [];
       for (const entry of [...this._activeLocks.values()].filter(lock => lock.requestId === requestId)) {
@@ -494,7 +514,7 @@ class LockingEngine extends EventEmitter {
         throw new Error(`Pending lock cleanup failed for request ${requestId}: ${failures.join('; ')}`);
       }
       return cancelled;
-    });
+    }));
   }
 
   /**
@@ -617,7 +637,16 @@ class LockingEngine extends EventEmitter {
 
     await previous;
     try {
-      return await operation();
+      // Lock-order checking (tests / harness only) keeps the original path when not installed.
+      if (!memoryLockOrderActive()) return await operation();
+      return await runInLockScope(`request ${requestId}`, async () => {
+        noteLockAcquired('EmergencyRequest', requestId);
+        try {
+          return await operation();
+        } finally {
+          noteLockReleased('EmergencyRequest', requestId);
+        }
+      });
     } finally {
       release();
       if (this._requestLocks.get(requestId) === queued) this._requestLocks.delete(requestId);

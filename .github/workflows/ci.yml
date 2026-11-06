@@ -68,12 +68,35 @@ jobs:
         # appends MYSQL_TEST_HOST/PORT/USER/PASS/DB to $GITHUB_ENV for the later steps.
         run: ENV_OUT="$GITHUB_ENV" bash scripts/prepare-mysql-test-db.sh
 
+      # Linux MySQL treats table names as case-sensitive (macOS/Windows installs usually do not), so a
+      # wrongly cased table name only fails here. Verify the server really is 8.4 with that behaviour.
+      - name: Verify MySQL 8.4 with case-sensitive table names
+        run: |
+          read -r version lower_case < <(MYSQL_PWD="$MYSQL_TEST_PASS" mysql --protocol=TCP -h "$MYSQL_TEST_HOST" \
+            -P "$MYSQL_TEST_PORT" -u "$MYSQL_TEST_USER" -N -e 'SELECT VERSION(), @@lower_case_table_names')
+          echo "MySQL ${version}, lower_case_table_names=${lower_case}"
+          [[ "$version" == 8.4.* ]] || { echo "::error::expected MySQL 8.4, got ${version}"; exit 1; }
+          [[ "$lower_case" == "0" ]] || { echo "::error::table names must be case-sensitive (lower_case_table_names=0)"; exit 1; }
+
       - name: Initialise the schema and demo data with the project's own tooling
         run: |
           export DB_USE_MEMORY=false DB_HOST="$MYSQL_TEST_HOST" DB_PORT="$MYSQL_TEST_PORT" \
                  DB_NAME="$MYSQL_TEST_DB" DB_USER="$MYSQL_TEST_USER" DB_PASS="$MYSQL_TEST_PASS"
           npm run db:init
           npm run db:seed
+          # Behavioural proof of case sensitivity: the table is `Hospital`; `hospital` must not resolve.
+          if MYSQL_PWD="$MYSQL_TEST_PASS" mysql --protocol=TCP -h "$MYSQL_TEST_HOST" -P "$MYSQL_TEST_PORT" \
+               -u "$MYSQL_TEST_USER" "$MYSQL_TEST_DB" -N -e 'SELECT COUNT(*) FROM hospital' 2>/dev/null; then
+            echo "::error::lower-case table name resolved: the server is not case-sensitive"; exit 1
+          fi
+
+      - name: Migration runner on the freshly initialised database (status, then a no-op apply)
+        run: |
+          export DB_USE_MEMORY=false DB_HOST="$MYSQL_TEST_HOST" DB_PORT="$MYSQL_TEST_PORT" \
+                 DB_NAME="$MYSQL_TEST_DB" DB_USER="$MYSQL_TEST_USER" DB_PASS="$MYSQL_TEST_PASS"
+          npm run db:migrate -- --status
+          npm run db:migrate | tee migrate-output.log
+          grep -q 'schema is up to date' migrate-output.log
 
       - name: Run Full Unit & Concurrency Test Automation Suite (MySQL required)
         run: |

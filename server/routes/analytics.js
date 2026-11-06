@@ -8,6 +8,15 @@ import { store } from '../db/store.js';
 
 const router = express.Router();
 
+// Capacity model (both stores): `available_capacity` counts every unit not committed to a case, and
+// INCLUDES the units soft-locked by pending 90-second referrals (`locked_capacity`). So:
+//   free   = available_capacity - locked_capacity   (can be offered to a new referral)
+//   locked = locked_capacity                        (reserved by a pending referral)
+//   in_use = total_capacity - available_capacity    (committed to accepted cases)
+// and free + locked + in_use = total_capacity.
+const freeUnits = r => r.available_capacity - r.locked_capacity;
+const sum = (rows, pick) => rows.reduce((s, r) => s + pick(r), 0);
+
 // GET /api/v1/analytics/dashboard
 // Live command center KPIs
 router.get('/dashboard', authenticate, async (req, res) => {
@@ -19,24 +28,26 @@ router.get('/dashboard', authenticate, async (req, res) => {
   const closedHospitals      = hospitals.filter(h => h.emergency_status === 'CLOSED').length;
   const availableAmbulances  = ambulances.filter(a => a.status === 'AVAILABLE').length;
 
+  // "available" figures are FREE units: soft-locked units are already promised to a pending referral.
   const icuBeds = medicalResources.filter(r => r.resource_type === 'ICU_BED');
-  const totalIcuAvail  = icuBeds.reduce((s, r) => s + r.available_capacity, 0);
-  const totalIcuLocked = icuBeds.reduce((s, r) => s + r.locked_capacity, 0);
-  const totalIcu       = icuBeds.reduce((s, r) => s + r.total_capacity, 0);
+  const totalIcuAvail  = sum(icuBeds, freeUnits);
+  const totalIcuLocked = sum(icuBeds, r => r.locked_capacity);
+  const totalIcu       = sum(icuBeds, r => r.total_capacity);
 
   const ventilators = medicalResources.filter(r => r.resource_type === 'VENTILATOR');
-  const totalVentAvail = ventilators.reduce((s, r) => s + r.available_capacity, 0);
-  const totalVent      = ventilators.reduce((s, r) => s + r.total_capacity, 0);
+  const totalVentAvail = sum(ventilators, freeUnits);
+  const totalVent      = sum(ventilators, r => r.total_capacity);
 
   const ots = medicalResources.filter(r => r.resource_type === 'OT');
-  const totalOTAvail = ots.reduce((s, r) => s + r.available_capacity, 0);
+  const totalOTAvail = sum(ots, freeUnits);
 
   const activeDoctors = doctors.filter(d => d.availability_status === 'AVAILABLE').length;
 
-  // Hospital capacity color codes (Green >= 20%, Yellow < 20%, Red = 0)
+  // Hospital capacity color codes by free ICU share (Green >= 20%, Yellow < 20%, Red = 0)
   const hospitalStatuses = hospitals.map(h => {
     const icu = medicalResources.find(r => r.hospital_id === h.hospital_id && r.resource_type === 'ICU_BED');
-    const util = icu ? (icu.available_capacity / Math.max(1, icu.total_capacity)) : 0;
+    const icuFree = icu ? freeUnits(icu) : 0;
+    const util = icu ? (icuFree / Math.max(1, icu.total_capacity)) : 0;
     let capacityColor = 'GREEN';
     if (util === 0)    capacityColor = 'RED';
     else if (util < 0.2) capacityColor = 'YELLOW';
@@ -45,7 +56,7 @@ router.get('/dashboard', authenticate, async (req, res) => {
       hospital_id:      h.hospital_id,
       hospital_name:    h.hospital_name,
       emergency_status: h.emergency_status,
-      icu_available:    icu?.available_capacity || 0,
+      icu_available:    icuFree,
       icu_total:        icu?.total_capacity || 0,
       capacity_color:   h.emergency_status === 'CLOSED' ? 'RED' : capacityColor
     };
@@ -141,14 +152,13 @@ router.get('/resources', authenticate, async (req, res) => {
     const resources = medicalResources.filter(r => r.hospital_id === h.hospital_id);
     const summary = {};
     resources.forEach(r => {
-      const util = r.total_capacity > 0
-        ? Math.round(((r.total_capacity - r.available_capacity) / r.total_capacity) * 100)
-        : 0;
+      const inUse = r.total_capacity - r.available_capacity; // committed to accepted cases
+      const util = r.total_capacity > 0 ? Math.round((inUse / r.total_capacity) * 100) : 0;
       summary[r.resource_type] = {
         total: r.total_capacity,
-        available: r.available_capacity,
+        available: freeUnits(r),       // free = not committed and not soft-locked
         locked: r.locked_capacity,
-        in_use: r.total_capacity - r.available_capacity - r.locked_capacity,
+        in_use: inUse,                 // available + locked + in_use = total
         utilization_pct: util
       };
     });

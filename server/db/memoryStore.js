@@ -316,6 +316,11 @@ export class MemoryStore extends EventEmitter {
     }
     request.status = newStatus;
     request.updated_at = new Date().toISOString();
+    // Test-only pause point, at an await this method already has below (no extra interleaving otherwise).
+    const hooks = this.lockingEngine.hooks;
+    if (hooks?.active('transition:statusRecorded')) {
+      await hooks.run('transition:statusRecorded', { backend: 'memory', requestId, previous, newStatus });
+    }
 
     let lockCleanupError = null;
     const isTerminal = TERMINAL_STATES.includes(newStatus);
@@ -337,15 +342,20 @@ export class MemoryStore extends EventEmitter {
       }
     }
 
+    let released = 0;
+    let capped = 0;
     if (isTerminal) {
       this.db.resourceAllocations
         .filter(a => a.request_id === requestId && a.status === 'COMMITTED')
         .forEach(alloc => {
           alloc.status = 'RELEASED';
           alloc.released_at = new Date().toISOString();
+          released += 1;
           const resource = this.db.medicalResources.find(r => r.resource_id === alloc.resource_id);
           if (resource) {
-            resource.available_capacity += 1;
+            // Never above total capacity: a unit removed from service while in use is not handed out again.
+            if (resource.available_capacity >= resource.total_capacity) capped += 1;
+            resource.available_capacity = Math.min(resource.available_capacity + 1, resource.total_capacity);
             resource.version_lock += 1;
           }
         });
@@ -363,7 +373,7 @@ export class MemoryStore extends EventEmitter {
 
     this.db.auditLog({
       request_id: requestId, event_type: 'STATUS_CHANGED', previous_state: previous, new_state: newStatus,
-      actor_role: actor.role, actor_id: actor.id
+      actor_role: actor.role, actor_id: actor.id, metadata: { released_allocations: released, capped_releases: capped }
     });
     return { previous, status: newStatus, unchanged: false, lockCleanupError };
   }
@@ -524,8 +534,9 @@ export class MemoryStore extends EventEmitter {
     return {
       active_emergencies: this.db.emergencyRequests.filter(r => !TERMINAL_STATES.includes(r.status)).length,
       critical_p1: this.db.emergencyRequests.filter(r => r.priority === 1 && r.status === 'WAITING').length,
-      icu_available: icu.reduce((s, r) => s + r.available_capacity, 0),
-      ventilators_available: vents.reduce((s, r) => s + r.available_capacity, 0),
+      // Free units: soft-locked units are counted inside available_capacity but already reserved.
+      icu_available: icu.reduce((s, r) => s + r.available_capacity - r.locked_capacity, 0),
+      ventilators_available: vents.reduce((s, r) => s + r.available_capacity - r.locked_capacity, 0),
       hospitals_open: this.db.hospitals.filter(h => h.emergency_status === 'OPEN').length,
       ambulances_available: this.db.ambulances.filter(a => a.status === 'AVAILABLE').length,
       active_locks: (await this.lockingEngine.getActiveLocks()).length,
