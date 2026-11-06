@@ -1,0 +1,31 @@
+{
+  "name": "mass-casualty",
+  "version": 1,
+  "description": "A regional mass-casualty surge: 120 cases arrive together and compete for 6 hospitals (one closed) with scarce ICU beds, ventilators, operating theatres, specialists and ambulances. All names and numbers are fictional.",
+  "seed": 20261106,
+  "cases": 120,
+  "concurrency": 24,
+  "poolSize": 20,
+  "runs": 3,
+  "maxHospitalsTried": 4,
+  "caseMix": { "CARDIAC": 25, "TRAUMA": 20, "POLYTRAUMA": 10, "STROKE": 15, "RESPIRATORY": 15, "PEDIATRIC": 5, "GENERAL": 10 },
+  "priorities": { "1": 25, "2": 30, "3": 25, "4": 15, "5": 5 },
+  "decisions": { "accept": 70, "reject": 20, "expire": 10 },
+  "outcomes": { "complete": 50, "cancel": 10, "keep": 40 },
+  "fixture": {
+    "hospitals": [
+      { "hospital_id": "SIM-H1", "emergency_status": "OPEN", "acceptance_rate": 0.95, "avg_response_sec": 30,
+        "capacity": { "ICU_BED": 8, "VENTILATOR": 6, "OT": 3 }, "specialists": ["CARDIOLOGIST", "TRAUMA_SURGEON", "NEUROLOGIST", "PEDIATRICIAN"], "ambulances": 3 },
+      { "hospital_id": "SIM-H2", "emergency_status": "OPEN", "acceptance_rate": 0.90, "avg_response_sec": 35,
+        "capacity": { "ICU_BED": 6, "VENTILATOR": 4, "OT": 2 }, "specialists": ["CARDIOLOGIST", "TRAUMA_SURGEON"], "ambulances": 2 },
+      { "hospital_id": "SIM-H3", "emergency_status": "OPEN", "acceptance_rate": 0.85, "avg_response_sec": 40,
+        "capacity": { "ICU_BED": 5, "VENTILATOR": 5, "OT": 2 }, "specialists": ["NEUROLOGIST", "PEDIATRICIAN"], "ambulances": 2 },
+      { "hospital_id": "SIM-H4", "emergency_status": "LIMITED", "acceptance_rate": 0.80, "avg_response_sec": 50,
+        "capacity": { "ICU_BED": 3, "VENTILATOR": 2, "OT": 1 }, "specialists": ["TRAUMA_SURGEON"], "ambulances": 1 },
+      { "hospital_id": "SIM-H5", "emergency_status": "OPEN", "acceptance_rate": 0.75, "avg_response_sec": 55,
+        "capacity": { "ICU_BED": 4, "VENTILATOR": 3, "OT": 1 }, "specialists": ["CARDIOLOGIST", "NEUROLOGIST"], "ambulances": 2 },
+      { "hospital_id": "SIM-H6", "emergency_status": "CLOSED", "acceptance_rate": 0.70, "avg_response_sec": 60,
+        "capacity": { "ICU_BED": 6, "VENTILATOR": 4, "OT": 2 }, "specialists": ["CARDIOLOGIST", "TRAUMA_SURGEON"], "ambulances": 1 }
+    ]
+  }
+}

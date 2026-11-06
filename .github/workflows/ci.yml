@@ -105,7 +105,13 @@ jobs:
           grep -qx '# skipped 0' test-output.log
           grep -qx '# fail 0' test-output.log
 
-      - name: Concurrency Stress Test Suite (Issue #24 / P3-01)
+      # The real mass-casualty harness (sim/): every safety invariant and the lock order are checked after
+      # each phase against MySQL; the step fails on any violation or unexpected error.
+      - name: Mass-casualty stress harness smoke (MySQL, Issue #24 / P3-01)
+        run: npm run sim:smoke
+
+      # Legacy test of the in-memory mutex only (tests/concurrency_stress.test.js); kept for continuity.
+      - name: Legacy in-memory mutex concurrency test (tests/concurrency_stress.test.js)
         run: npm run test:concurrency
 
       - name: Banker's Compound Deadlock Engine Suite (Issue #25 / P3-02)

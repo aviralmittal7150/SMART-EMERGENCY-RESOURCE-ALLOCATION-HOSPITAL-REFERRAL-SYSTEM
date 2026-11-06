@@ -23,7 +23,10 @@
     "db:init": "node server/db/init.js",
     "db:seed": "node server/db/init.js --seed",
     "db:migrate": "node server/db/migrate.js",
-    "test:mysql": "node --test --test-force-exit tests/mysql_locking.test.js tests/mysql_routes.test.js tests/api_integration_mysql.test.js tests/mysql_migration.test.js tests/mysql_migration_runner.test.js tests/contract_mysql.test.js tests/mysql_deadlock_retry.test.js"
+    "sim": "node sim/cli.js",
+    "sim:smoke": "node sim/cli.js --scenario sim/scenarios/smoke.json --backend mysql --runs 1",
+    "sim:baseline": "node sim/cli.js --scenario sim/scenarios/mass-casualty-v1.json --backend mysql --runs 3",
+    "test:mysql": "node --test --test-force-exit tests/mysql_locking.test.js tests/mysql_routes.test.js tests/api_integration_mysql.test.js tests/mysql_migration.test.js tests/mysql_migration_runner.test.js tests/contract_mysql.test.js tests/mysql_deadlock_retry.test.js tests/sim_harness_mysql.test.js"
   },
   "keywords": [
     "emergency",
