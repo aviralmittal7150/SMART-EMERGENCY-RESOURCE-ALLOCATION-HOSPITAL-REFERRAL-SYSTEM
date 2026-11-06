@@ -1,0 +1,918 @@
+{
+  "schema": "eris-sim-report/1",
+  "generatedAt": "2026-11-06T10:52:42.603Z",
+  "label": "Phase 3 Step 2 baseline (in-memory reference)",
+  "scenario": {
+    "file": "sim/scenarios/mass-casualty-v1.json",
+    "name": "mass-casualty",
+    "version": 1,
+    "seed": 20261106,
+    "cases": 120,
+    "concurrency": 24,
+    "sha256": "5555348842b8002d646c5857bf31698e6ac2953c3ced572231a361ce6e696e51"
+  },
+  "fixtureSha256": "acfba3c62e115cce2c2f647bfebfe781b3ccfd4aba31293b3e9b7513bb6f2e2c",
+  "workload": {
+    "fingerprint": "1d2074a8e526aa0d3e56666b59e91e8d47b008d4b3c2977fd8f6a8bc9fe22ce1",
+    "emergencyTypes": {
+      "CARDIAC": 29,
+      "TRAUMA": 30,
+      "RESPIRATORY": 14,
+      "PEDIATRIC": 5,
+      "STROKE": 14,
+      "GENERAL": 12,
+      "POLYTRAUMA": 16
+    },
+    "decisions": {
+      "accept": 84,
+      "expire": 14,
+      "reject": 22
+    },
+    "outcomes": {
+      "cancel": 19,
+      "complete": 59,
+      "keep": 42
+    }
+  },
+  "environment": {
+    "gitCommit": "c5b1b741a59a6426db861b9b9a2a7194fff77e4f",
+    "gitDirty": false,
+    "node": "v22.20.0",
+    "platform": "darwin 27.0.0",
+    "arch": "arm64",
+    "cpuModel": "Apple M2",
+    "cpuCount": 8,
+    "memoryGb": 16
+  },
+  "backend": {
+    "backend": "memory",
+    "database": "in-memory demo store"
+  },
+  "measurementNotes": [
+    "Latency is wall-clock time per store call measured in-process with performance.now(); it includes connection-pool queueing.",
+    "The lock-order checker is installed during runs (small overhead on every SQL statement / in-memory lock).",
+    "The workload is identical across runs (same fingerprint); which case wins a contested unit is not, hence the spread."
+  ],
+  "runs": [
+    {
+      "wallMs": 22.2,
+      "throughputOpsPerSec": 26958.7,
+      "totalOperations": 598,
+      "phases": [
+        {
+          "name": "intake",
+          "wallMs": 1.7,
+          "operations": 120,
+          "invariantViolations": 0
+        },
+        {
+          "name": "referral",
+          "wallMs": 16.2,
+          "operations": 381,
+          "invariantViolations": 0
+        },
+        {
+          "name": "decision",
+          "wallMs": 2.1,
+          "operations": 44,
+          "invariantViolations": 0
+        },
+        {
+          "name": "discharge",
+          "wallMs": 1.1,
+          "operations": 53,
+          "invariantViolations": 0
+        }
+      ],
+      "operations": {
+        "create": {
+          "attempts": 120,
+          "ok": 120,
+          "refused": {},
+          "latencyMs": {
+            "count": 120,
+            "mean": 0.15,
+            "p50": 0.08,
+            "p95": 0.43,
+            "p99": 0.44,
+            "max": 0.68
+          }
+        },
+        "initiate": {
+          "attempts": 381,
+          "ok": 38,
+          "refused": {
+            "specialist_unavailable": 107,
+            "hospital_closed": 62,
+            "no_capacity": 174
+          },
+          "latencyMs": {
+            "count": 381,
+            "mean": 0.86,
+            "p50": 0.55,
+            "p95": 2.18,
+            "p99": 3.12,
+            "max": 3.74
+          }
+        },
+        "accept": {
+          "attempts": 29,
+          "ok": 29,
+          "refused": {},
+          "latencyMs": {
+            "count": 29,
+            "mean": 1.01,
+            "p50": 1.39,
+            "p95": 1.46,
+            "p99": 1.51,
+            "max": 1.51
+          }
+        },
+        "reject": {
+          "attempts": 6,
+          "ok": 6,
+          "refused": {},
+          "latencyMs": {
+            "count": 6,
+            "mean": 0.88,
+            "p50": 0.28,
+            "p95": 1.54,
+            "p99": 1.54,
+            "max": 1.54
+          }
+        },
+        "expire": {
+          "attempts": 3,
+          "ok": 3,
+          "refused": {},
+          "latencyMs": {
+            "count": 3,
+            "mean": 0.86,
+            "p50": 0.98,
+            "p95": 1.44,
+            "p99": 1.44,
+            "max": 1.44
+          }
+        },
+        "accept_failover": {
+          "attempts": 6,
+          "ok": 6,
+          "refused": {},
+          "latencyMs": {
+            "count": 6,
+            "mean": 0.06,
+            "p50": 0.06,
+            "p95": 0.07,
+            "p99": 0.07,
+            "max": 0.07
+          }
+        },
+        "treat": {
+          "attempts": 17,
+          "ok": 17,
+          "refused": {},
+          "latencyMs": {
+            "count": 17,
+            "mean": 0.08,
+            "p50": 0.1,
+            "p95": 0.16,
+            "p99": 0.16,
+            "max": 0.16
+          }
+        },
+        "cancel": {
+          "attempts": 19,
+          "ok": 19,
+          "refused": {},
+          "latencyMs": {
+            "count": 19,
+            "mean": 0.22,
+            "p50": 0.12,
+            "p95": 0.67,
+            "p99": 0.67,
+            "max": 0.67
+          }
+        },
+        "complete": {
+          "attempts": 17,
+          "ok": 17,
+          "refused": {},
+          "latencyMs": {
+            "count": 17,
+            "mean": 0.2,
+            "p50": 0.21,
+            "p95": 0.38,
+            "p99": 0.38,
+            "max": 0.38
+          }
+        }
+      },
+      "casesPlaced": 38,
+      "casesAllocated": 35,
+      "finalState": {
+        "requestsByStatus": {
+          "CANCELLED": 19,
+          "COMPLETED": 17,
+          "ALLOCATED": 13,
+          "WAITING": 71
+        },
+        "unitsCommitted": 23,
+        "unitsSoftLocked": 0,
+        "ambulancesOnRoad": 5
+      },
+      "conflicts": {
+        "deadlockRetries": 0,
+        "busyRefusals": 0
+      },
+      "lockOrder": {
+        "acquisitionsChecked": 695,
+        "violations": 0,
+        "details": null
+      },
+      "invariantFailures": [],
+      "unexpectedErrors": [],
+      "passed": true
+    },
+    {
+      "wallMs": 13.3,
+      "throughputOpsPerSec": 45046.2,
+      "totalOperations": 598,
+      "phases": [
+        {
+          "name": "intake",
+          "wallMs": 0.9,
+          "operations": 120,
+          "invariantViolations": 0
+        },
+        {
+          "name": "referral",
+          "wallMs": 10.7,
+          "operations": 381,
+          "invariantViolations": 0
+        },
+        {
+          "name": "decision",
+          "wallMs": 0.8,
+          "operations": 44,
+          "invariantViolations": 0
+        },
+        {
+          "name": "discharge",
+          "wallMs": 0.5,
+          "operations": 53,
+          "invariantViolations": 0
+        }
+      ],
+      "operations": {
+        "create": {
+          "attempts": 120,
+          "ok": 120,
+          "refused": {},
+          "latencyMs": {
+            "count": 120,
+            "mean": 0.09,
+            "p50": 0.08,
+            "p95": 0.17,
+            "p99": 0.18,
+            "max": 0.18
+          }
+        },
+        "initiate": {
+          "attempts": 381,
+          "ok": 38,
+          "refused": {
+            "specialist_unavailable": 107,
+            "hospital_closed": 62,
+            "no_capacity": 174
+          },
+          "latencyMs": {
+            "count": 381,
+            "mean": 0.54,
+            "p50": 0.38,
+            "p95": 1.55,
+            "p99": 2.95,
+            "max": 3.33
+          }
+        },
+        "accept": {
+          "attempts": 29,
+          "ok": 29,
+          "refused": {},
+          "latencyMs": {
+            "count": 29,
+            "mean": 0.33,
+            "p50": 0.36,
+            "p95": 0.44,
+            "p99": 0.44,
+            "max": 0.44
+          }
+        },
+        "reject": {
+          "attempts": 6,
+          "ok": 6,
+          "refused": {},
+          "latencyMs": {
+            "count": 6,
+            "mean": 0.33,
+            "p50": 0.21,
+            "p95": 0.48,
+            "p99": 0.48,
+            "max": 0.48
+          }
+        },
+        "expire": {
+          "attempts": 3,
+          "ok": 3,
+          "refused": {},
+          "latencyMs": {
+            "count": 3,
+            "mean": 0.37,
+            "p50": 0.48,
+            "p95": 0.52,
+            "p99": 0.52,
+            "max": 0.52
+          }
+        },
+        "accept_failover": {
+          "attempts": 6,
+          "ok": 6,
+          "refused": {},
+          "latencyMs": {
+            "count": 6,
+            "mean": 0.05,
+            "p50": 0.05,
+            "p95": 0.06,
+            "p99": 0.06,
+            "max": 0.06
+          }
+        },
+        "treat": {
+          "attempts": 17,
+          "ok": 17,
+          "refused": {},
+          "latencyMs": {
+            "count": 17,
+            "mean": 0.03,
+            "p50": 0.03,
+            "p95": 0.06,
+            "p99": 0.06,
+            "max": 0.06
+          }
+        },
+        "cancel": {
+          "attempts": 19,
+          "ok": 19,
+          "refused": {},
+          "latencyMs": {
+            "count": 19,
+            "mean": 0.14,
+            "p50": 0.12,
+            "p95": 0.22,
+            "p99": 0.22,
+            "max": 0.22
+          }
+        },
+        "complete": {
+          "attempts": 17,
+          "ok": 17,
+          "refused": {},
+          "latencyMs": {
+            "count": 17,
+            "mean": 0.13,
+            "p50": 0.15,
+            "p95": 0.17,
+            "p99": 0.17,
+            "max": 0.17
+          }
+        }
+      },
+      "casesPlaced": 38,
+      "casesAllocated": 35,
+      "finalState": {
+        "requestsByStatus": {
+          "CANCELLED": 19,
+          "COMPLETED": 17,
+          "ALLOCATED": 13,
+          "WAITING": 71
+        },
+        "unitsCommitted": 23,
+        "unitsSoftLocked": 0,
+        "ambulancesOnRoad": 5
+      },
+      "conflicts": {
+        "deadlockRetries": 0,
+        "busyRefusals": 0
+      },
+      "lockOrder": {
+        "acquisitionsChecked": 695,
+        "violations": 0,
+        "details": null
+      },
+      "invariantFailures": [],
+      "unexpectedErrors": [],
+      "passed": true
+    },
+    {
+      "wallMs": 11.1,
+      "throughputOpsPerSec": 54039.6,
+      "totalOperations": 598,
+      "phases": [
+        {
+          "name": "intake",
+          "wallMs": 0.6,
+          "operations": 120,
+          "invariantViolations": 0
+        },
+        {
+          "name": "referral",
+          "wallMs": 9,
+          "operations": 381,
+          "invariantViolations": 0
+        },
+        {
+          "name": "decision",
+          "wallMs": 0.7,
+          "operations": 44,
+          "invariantViolations": 0
+        },
+        {
+          "name": "discharge",
+          "wallMs": 0.5,
+          "operations": 53,
+          "invariantViolations": 0
+        }
+      ],
+      "operations": {
+        "create": {
+          "attempts": 120,
+          "ok": 120,
+          "refused": {},
+          "latencyMs": {
+            "count": 120,
+            "mean": 0.06,
+            "p50": 0.06,
+            "p95": 0.1,
+            "p99": 0.12,
+            "max": 0.12
+          }
+        },
+        "initiate": {
+          "attempts": 381,
+          "ok": 38,
+          "refused": {
+            "specialist_unavailable": 107,
+            "hospital_closed": 62,
+            "no_capacity": 174
+          },
+          "latencyMs": {
+            "count": 381,
+            "mean": 0.46,
+            "p50": 0.38,
+            "p95": 0.97,
+            "p99": 1.26,
+            "max": 1.49
+          }
+        },
+        "accept": {
+          "attempts": 29,
+          "ok": 29,
+          "refused": {},
+          "latencyMs": {
+            "count": 29,
+            "mean": 0.26,
+            "p50": 0.24,
+            "p95": 0.31,
+            "p99": 0.31,
+            "max": 0.31
+          }
+        },
+        "reject": {
+          "attempts": 6,
+          "ok": 6,
+          "refused": {},
+          "latencyMs": {
+            "count": 6,
+            "mean": 0.29,
+            "p50": 0.25,
+            "p95": 0.36,
+            "p99": 0.36,
+            "max": 0.36
+          }
+        },
+        "expire": {
+          "attempts": 3,
+          "ok": 3,
+          "refused": {},
+          "latencyMs": {
+            "count": 3,
+            "mean": 0.37,
+            "p50": 0.47,
+            "p95": 0.48,
+            "p99": 0.48,
+            "max": 0.48
+          }
+        },
+        "accept_failover": {
+          "attempts": 6,
+          "ok": 6,
+          "refused": {},
+          "latencyMs": {
+            "count": 6,
+            "mean": 0.05,
+            "p50": 0.05,
+            "p95": 0.05,
+            "p99": 0.05,
+            "max": 0.05
+          }
+        },
+        "treat": {
+          "attempts": 17,
+          "ok": 17,
+          "refused": {},
+          "latencyMs": {
+            "count": 17,
+            "mean": 0.03,
+            "p50": 0.03,
+            "p95": 0.05,
+            "p99": 0.05,
+            "max": 0.05
+          }
+        },
+        "cancel": {
+          "attempts": 19,
+          "ok": 19,
+          "refused": {},
+          "latencyMs": {
+            "count": 19,
+            "mean": 0.12,
+            "p50": 0.13,
+            "p95": 0.15,
+            "p99": 0.15,
+            "max": 0.15
+          }
+        },
+        "complete": {
+          "attempts": 17,
+          "ok": 17,
+          "refused": {},
+          "latencyMs": {
+            "count": 17,
+            "mean": 0.11,
+            "p50": 0.13,
+            "p95": 0.14,
+            "p99": 0.14,
+            "max": 0.14
+          }
+        }
+      },
+      "casesPlaced": 38,
+      "casesAllocated": 35,
+      "finalState": {
+        "requestsByStatus": {
+          "CANCELLED": 19,
+          "COMPLETED": 17,
+          "ALLOCATED": 13,
+          "WAITING": 71
+        },
+        "unitsCommitted": 23,
+        "unitsSoftLocked": 0,
+        "ambulancesOnRoad": 5
+      },
+      "conflicts": {
+        "deadlockRetries": 0,
+        "busyRefusals": 0
+      },
+      "lockOrder": {
+        "acquisitionsChecked": 695,
+        "violations": 0,
+        "details": null
+      },
+      "invariantFailures": [],
+      "unexpectedErrors": [],
+      "passed": true
+    }
+  ],
+  "aggregate": {
+    "wallMs": {
+      "min": 11.1,
+      "median": 13.3,
+      "max": 22.2
+    },
+    "throughputOpsPerSec": {
+      "min": 26958.7,
+      "median": 45046.2,
+      "max": 54039.6
+    },
+    "casesPlaced": {
+      "min": 38,
+      "median": 38,
+      "max": 38
+    },
+    "casesAllocated": {
+      "min": 35,
+      "median": 35,
+      "max": 35
+    },
+    "deadlockRetries": {
+      "min": 0,
+      "median": 0,
+      "max": 0
+    },
+    "busyRefusals": {
+      "min": 0,
+      "median": 0,
+      "max": 0
+    },
+    "operations": {
+      "accept": {
+        "attempts": {
+          "min": 29,
+          "median": 29,
+          "max": 29
+        },
+        "ok": {
+          "min": 29,
+          "median": 29,
+          "max": 29
+        },
+        "p50Ms": {
+          "min": 0.24,
+          "median": 0.36,
+          "max": 1.39
+        },
+        "p95Ms": {
+          "min": 0.31,
+          "median": 0.44,
+          "max": 1.46
+        },
+        "p99Ms": {
+          "min": 0.31,
+          "median": 0.44,
+          "max": 1.51
+        },
+        "maxMs": {
+          "min": 0.31,
+          "median": 0.44,
+          "max": 1.51
+        }
+      },
+      "accept_failover": {
+        "attempts": {
+          "min": 6,
+          "median": 6,
+          "max": 6
+        },
+        "ok": {
+          "min": 6,
+          "median": 6,
+          "max": 6
+        },
+        "p50Ms": {
+          "min": 0.05,
+          "median": 0.05,
+          "max": 0.06
+        },
+        "p95Ms": {
+          "min": 0.05,
+          "median": 0.06,
+          "max": 0.07
+        },
+        "p99Ms": {
+          "min": 0.05,
+          "median": 0.06,
+          "max": 0.07
+        },
+        "maxMs": {
+          "min": 0.05,
+          "median": 0.06,
+          "max": 0.07
+        }
+      },
+      "cancel": {
+        "attempts": {
+          "min": 19,
+          "median": 19,
+          "max": 19
+        },
+        "ok": {
+          "min": 19,
+          "median": 19,
+          "max": 19
+        },
+        "p50Ms": {
+          "min": 0.12,
+          "median": 0.12,
+          "max": 0.13
+        },
+        "p95Ms": {
+          "min": 0.15,
+          "median": 0.22,
+          "max": 0.67
+        },
+        "p99Ms": {
+          "min": 0.15,
+          "median": 0.22,
+          "max": 0.67
+        },
+        "maxMs": {
+          "min": 0.15,
+          "median": 0.22,
+          "max": 0.67
+        }
+      },
+      "complete": {
+        "attempts": {
+          "min": 17,
+          "median": 17,
+          "max": 17
+        },
+        "ok": {
+          "min": 17,
+          "median": 17,
+          "max": 17
+        },
+        "p50Ms": {
+          "min": 0.13,
+          "median": 0.15,
+          "max": 0.21
+        },
+        "p95Ms": {
+          "min": 0.14,
+          "median": 0.17,
+          "max": 0.38
+        },
+        "p99Ms": {
+          "min": 0.14,
+          "median": 0.17,
+          "max": 0.38
+        },
+        "maxMs": {
+          "min": 0.14,
+          "median": 0.17,
+          "max": 0.38
+        }
+      },
+      "create": {
+        "attempts": {
+          "min": 120,
+          "median": 120,
+          "max": 120
+        },
+        "ok": {
+          "min": 120,
+          "median": 120,
+          "max": 120
+        },
+        "p50Ms": {
+          "min": 0.06,
+          "median": 0.08,
+          "max": 0.08
+        },
+        "p95Ms": {
+          "min": 0.1,
+          "median": 0.17,
+          "max": 0.43
+        },
+        "p99Ms": {
+          "min": 0.12,
+          "median": 0.18,
+          "max": 0.44
+        },
+        "maxMs": {
+          "min": 0.12,
+          "median": 0.18,
+          "max": 0.68
+        }
+      },
+      "expire": {
+        "attempts": {
+          "min": 3,
+          "median": 3,
+          "max": 3
+        },
+        "ok": {
+          "min": 3,
+          "median": 3,
+          "max": 3
+        },
+        "p50Ms": {
+          "min": 0.47,
+          "median": 0.48,
+          "max": 0.98
+        },
+        "p95Ms": {
+          "min": 0.48,
+          "median": 0.52,
+          "max": 1.44
+        },
+        "p99Ms": {
+          "min": 0.48,
+          "median": 0.52,
+          "max": 1.44
+        },
+        "maxMs": {
+          "min": 0.48,
+          "median": 0.52,
+          "max": 1.44
+        }
+      },
+      "initiate": {
+        "attempts": {
+          "min": 381,
+          "median": 381,
+          "max": 381
+        },
+        "ok": {
+          "min": 38,
+          "median": 38,
+          "max": 38
+        },
+        "p50Ms": {
+          "min": 0.38,
+          "median": 0.38,
+          "max": 0.55
+        },
+        "p95Ms": {
+          "min": 0.97,
+          "median": 1.55,
+          "max": 2.18
+        },
+        "p99Ms": {
+          "min": 1.26,
+          "median": 2.95,
+          "max": 3.12
+        },
+        "maxMs": {
+          "min": 1.49,
+          "median": 3.33,
+          "max": 3.74
+        }
+      },
+      "reject": {
+        "attempts": {
+          "min": 6,
+          "median": 6,
+          "max": 6
+        },
+        "ok": {
+          "min": 6,
+          "median": 6,
+          "max": 6
+        },
+        "p50Ms": {
+          "min": 0.21,
+          "median": 0.25,
+          "max": 0.28
+        },
+        "p95Ms": {
+          "min": 0.36,
+          "median": 0.48,
+          "max": 1.54
+        },
+        "p99Ms": {
+          "min": 0.36,
+          "median": 0.48,
+          "max": 1.54
+        },
+        "maxMs": {
+          "min": 0.36,
+          "median": 0.48,
+          "max": 1.54
+        }
+      },
+      "treat": {
+        "attempts": {
+          "min": 17,
+          "median": 17,
+          "max": 17
+        },
+        "ok": {
+          "min": 17,
+          "median": 17,
+          "max": 17
+        },
+        "p50Ms": {
+          "min": 0.03,
+          "median": 0.03,
+          "max": 0.1
+        },
+        "p95Ms": {
+          "min": 0.05,
+          "median": 0.06,
+          "max": 0.16
+        },
+        "p99Ms": {
+          "min": 0.05,
+          "median": 0.06,
+          "max": 0.16
+        },
+        "maxMs": {
+          "min": 0.05,
+          "median": 0.06,
+          "max": 0.16
+        }
+      }
+    }
+  },
+  "passed": true
+}

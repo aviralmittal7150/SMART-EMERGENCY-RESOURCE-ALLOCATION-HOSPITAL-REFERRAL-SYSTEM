@@ -14,7 +14,7 @@ test('test:mysql lists every MySQL-backed test file, and only files that exist',
   // forces the MySQL variant of a shared scenario. A file that only *reads* API_TEST_BACKEND (memory by
   // default) is reached through its wrapper instead.
   const runsOnMysql = source => !/process\.env\.API_TEST_BACKEND ===/.test(source)
-    && [/^import .*'\.\/helpers\/mysqlTestDb\.js';$/m, /= await createMysqlBackend\(\)/, /^process\.env\.API_TEST_BACKEND = 'mysql';$/m].some(re => re.test(source));
+    && [/^import .*'\.\/helpers\/mysqlTestDb\.js';$/m, /= await createMysqlBackend\(/, /^process\.env\.API_TEST_BACKEND = 'mysql';$/m].some(re => re.test(source));
   const usesMysql = fs.readdirSync(testDir)
     .filter(name => name.endsWith('.test.js'))
     .filter(name => runsOnMysql(fs.readFileSync(new URL(name, testDir), 'utf8')))
