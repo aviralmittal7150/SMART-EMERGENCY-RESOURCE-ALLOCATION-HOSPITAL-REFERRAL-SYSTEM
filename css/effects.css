@@ -1,0 +1,329 @@
+/* ====================================================================
+   ERIS — Glass and motion
+   One glass system in two tiers, one easing curve, one duration scale.
+     Tier 1 (frosted): top-level surfaces — header, panels, dialogs.
+     Tier 2 (inset):   anything nested inside a tier-1 surface. Translucent
+                       fill only; blur inside blur adds cost, not depth.
+   Loaded last so it can restyle the surfaces defined in components.css.
+   ==================================================================== */
+
+:root,
+[data-theme="light"] {
+  --glass-bg:        rgba(255, 255, 255, 0.58);
+  --glass-bg-strong: rgba(255, 255, 255, 0.78);
+  --glass-inset:     rgba(255, 255, 255, 0.52);
+  --glass-inset-hover: rgba(255, 255, 255, 0.8);
+  --glass-edge:      rgba(211, 206, 198, 0.72);
+  --glass-divider:   rgba(211, 206, 198, 0.55);
+  --glass-highlight: rgba(255, 255, 255, 0.9);
+  --glass-blur:      blur(20px) saturate(1.5);
+  --glass-shadow:    inset 0 1px 0 var(--glass-highlight), 0 18px 40px -28px rgba(60, 44, 24, 0.35);
+  --glass-shadow-lift: inset 0 1px 0 var(--glass-highlight), 0 24px 48px -26px rgba(60, 44, 24, 0.45);
+
+  /* Background field the glass frosts: warm, cool and a hint of green. */
+  --field-1: rgba(255, 86, 0, 0.16);
+  --field-2: rgba(101, 181, 255, 0.22);
+  --field-3: rgba(11, 223, 80, 0.10);
+
+  /* Motion scale */
+  --ease-premium: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-swift:   cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-1: 160ms;   /* press, hover colour */
+  --dur-2: 280ms;   /* hover lift, indicator */
+  --dur-3: 560ms;   /* reveals */
+  --dur-4: 900ms;   /* hero headline */
+}
+
+[data-theme="dark"] {
+  --glass-bg:        rgba(28, 28, 27, 0.56);
+  --glass-bg-strong: rgba(22, 22, 21, 0.8);
+  --glass-inset:     rgba(255, 255, 255, 0.04);
+  --glass-inset-hover: rgba(255, 255, 255, 0.08);
+  --glass-edge:      rgba(255, 255, 255, 0.09);
+  --glass-divider:   rgba(255, 255, 255, 0.07);
+  --glass-highlight: rgba(255, 255, 255, 0.07);
+  --glass-shadow:    inset 0 1px 0 var(--glass-highlight), 0 24px 48px -28px rgba(0, 0, 0, 0.9);
+  --glass-shadow-lift: inset 0 1px 0 var(--glass-highlight), 0 28px 56px -26px rgba(0, 0, 0, 1);
+
+  --field-1: rgba(255, 86, 0, 0.18);
+  --field-2: rgba(60, 120, 255, 0.20);
+  --field-3: rgba(11, 223, 80, 0.07);
+}
+
+/* ══════════ Background field ══════════ */
+body { background: transparent; }
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20vmax;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(38vmax 30vmax at 82% 12%, var(--field-1), transparent 70%),
+    radial-gradient(42vmax 34vmax at 8% 38%, var(--field-2), transparent 70%),
+    radial-gradient(36vmax 28vmax at 70% 92%, var(--field-3), transparent 70%);
+  animation: fieldDrift 48s ease-in-out infinite alternate;
+}
+@keyframes fieldDrift {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(-3vmax, 2vmax, 0) scale(1.05); }
+  100% { transform: translate3d(2vmax, -2vmax, 0) scale(1.02); }
+}
+
+/* ══════════ Tier 1: frosted surfaces ══════════ */
+.panel,
+.kpi-grid,
+.lifecycle-tracker-wrap,
+.roadside-hero-banner,
+.roadside-loc-bar,
+.voice-intake-card,
+.triage-diagnosis-panel,
+.hero-recommendation-card,
+.tab-pane > .grid-2col > div > .panel,
+.kpi-card:not(.kpi-grid .kpi-card) {
+  background: var(--glass-bg);
+  border-color: var(--glass-edge);
+  -webkit-backdrop-filter: var(--glass-blur);
+          backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow);
+}
+.hero-recommendation-card { border-color: var(--ink); }
+
+.top-navbar {
+  background: color-mix(in srgb, var(--canvas) 62%, transparent);
+  border-bottom-color: var(--glass-edge);
+  -webkit-backdrop-filter: var(--glass-blur);
+          backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 -1px 0 var(--glass-highlight);
+}
+
+.modal-overlay {
+  background: rgba(17, 17, 17, 0.32) !important;
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+          backdrop-filter: blur(8px) saturate(1.2);
+  animation: overlayIn var(--dur-2) var(--ease-premium);
+}
+.modal-card {
+  background: var(--glass-bg-strong);
+  border-color: var(--glass-edge);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
+          backdrop-filter: blur(28px) saturate(1.6);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-xl);
+  animation: modalIn var(--dur-3) var(--ease-premium);
+}
+
+#globalNotificationBanner {
+  -webkit-backdrop-filter: blur(16px);
+          backdrop-filter: blur(16px);
+}
+
+/* ══════════ Tier 2: inset glass inside a frosted surface ══════════ */
+.hospital-card,
+.table-scroll,
+.resource-capsule,
+.inset-card,
+.audit-summary-card,
+.command-map-placeholder,
+.mic-section,
+.os-scheduling-note,
+#triageRecommendationInfo:not(:empty),
+#roadsideTriageRationale,
+.rec-reason-box,
+.auth-info-banner,
+.hero-eta-pill,
+.summary-row .summary-icon,
+.log-console,
+.panel-badge {
+  background-color: var(--glass-inset);
+  border-color: var(--glass-divider);
+}
+.matrix-table th { background: transparent; }
+.matrix-table tbody tr:hover td { background: var(--glass-inset-hover); }
+.matrix-table td { border-bottom-color: var(--glass-divider); }
+
+/* Controls are inset glass too, solid enough to read what is typed. */
+.form-input, .form-select, .form-textarea,
+.btn-secondary, .btn-demo, .btn-xs-outline,
+.theme-toggle-btn, .nav-menu-btn, .close-btn,
+.triage-btn, .resource-chip:not(.selected), .scenario-pill, .roadside-tag:not(.selected) {
+  background-color: var(--glass-inset);
+  border-color: var(--glass-edge);
+}
+.form-input:focus, .form-select:focus, .form-textarea:focus { background-color: var(--glass-bg-strong); }
+.role-selector-tabs { background: var(--glass-inset); box-shadow: inset 0 0 0 1px var(--glass-divider); }
+.role-tab-btn.active { background: var(--glass-bg-strong); box-shadow: 0 1px 2px rgba(17, 17, 17, 0.08), inset 0 1px 0 var(--glass-highlight); }
+
+/* KPI sheet: one frosted surface, cells divided by hairlines. */
+.kpi-grid { gap: 0; background: var(--glass-bg); }
+.kpi-grid .kpi-card {
+  background: transparent;
+  box-shadow: 1px 0 0 var(--glass-divider), 0 1px 0 var(--glass-divider);
+}
+
+/* ══════════ Interaction motion ══════════ */
+.btn, .btn-demo, .btn-xs-outline, .role-tab-btn, .close-btn, .theme-toggle-btn, .nav-menu-btn,
+.triage-btn, .resource-chip, .scenario-pill, .roadside-tag {
+  transition:
+    transform var(--dur-1) var(--ease-swift),
+    background-color var(--dur-2) var(--ease-premium),
+    border-color var(--dur-2) var(--ease-premium),
+    color var(--dur-2) var(--ease-premium),
+    box-shadow var(--dur-2) var(--ease-premium);
+}
+.btn:active:not(:disabled), .btn-demo:active, .triage-btn:active,
+.resource-chip:active, .scenario-pill:active, .roadside-tag:active,
+.theme-toggle-btn:active, .nav-menu-btn:active, .close-btn:active { transform: scale(0.97); }
+
+.btn-primary:hover, .btn-cyan:hover, .btn-accent:hover, .btn-dark:hover {
+  box-shadow: 0 10px 24px -12px rgba(17, 17, 17, 0.55);
+}
+.btn-emergency:hover { box-shadow: 0 12px 28px -12px rgba(255, 86, 0, 0.7); }
+.btn-secondary:hover { background-color: var(--glass-inset-hover); }
+
+/* Cards a person can act on lift slightly toward the pointer. */
+.hospital-card, .roadside-hero-banner, .triage-btn, .scenario-pill {
+  transition:
+    transform var(--dur-2) var(--ease-premium),
+    box-shadow var(--dur-2) var(--ease-premium),
+    border-color var(--dur-2) var(--ease-premium),
+    background-color var(--dur-2) var(--ease-premium);
+}
+@media (hover: hover) {
+  .hospital-card:hover, .roadside-hero-banner:hover {
+    transform: translateY(-2px);
+    background-color: var(--glass-inset-hover);
+    box-shadow: var(--glass-shadow-lift);
+  }
+  .triage-btn:hover, .scenario-pill:hover { transform: translateY(-1px); }
+}
+
+.theme-toggle-icon { transition: transform var(--dur-3) var(--ease-premium); }
+[data-theme="dark"] .theme-toggle-icon { transform: rotate(180deg); }
+
+/* Theme switch: colours cross-fade for one moment, then transitions drop off. */
+.fx-theming, .fx-theming *, .fx-theming *::before, .fx-theming *::after {
+  transition:
+    background-color 480ms var(--ease-premium),
+    border-color 480ms var(--ease-premium),
+    color 480ms var(--ease-premium),
+    box-shadow 480ms var(--ease-premium) !important;
+}
+
+/* ══════════ Sliding nav indicator ══════════ */
+.nav-tabs { position: relative; }
+.nav-indicator {
+  position: absolute;
+  left: 0; bottom: 0;
+  width: 0; height: 2px;
+  background: var(--ink);
+  border-radius: 2px;
+  pointer-events: none;
+  opacity: 0;
+}
+.nav-indicator.is-placed { opacity: 1; }
+.nav-indicator.is-ready {
+  transition:
+    transform var(--dur-3) var(--ease-premium),
+    width var(--dur-3) var(--ease-premium),
+    opacity var(--dur-2) ease;
+}
+.fx-ready .nav-tab-btn.active::before { background: transparent; }
+@media (max-width: 768px) {
+  .nav-indicator { display: none; }
+  .fx-ready .nav-tab-btn.active::before { background: var(--ink); }
+}
+
+/* ══════════ Hero headline reveal ══════════ */
+.fx-word {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: top;
+  padding-bottom: 0.08em;
+  margin-bottom: -0.08em;
+}
+.fx-word > span {
+  display: inline-block;
+  animation: wordRise var(--dur-4) var(--ease-premium) both;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+@keyframes wordRise {
+  from { transform: translate3d(0, 105%, 0); opacity: 0; }
+  60%  { opacity: 1; }
+  to   { transform: translate3d(0, 0, 0); opacity: 1; }
+}
+.fx-fade { animation: softRise var(--dur-3) var(--ease-premium) both; animation-delay: var(--fx-delay, 0ms); }
+@keyframes softRise {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); filter: blur(4px); }
+  to   { opacity: 1; transform: none; filter: none; }
+}
+
+/* First load: hero actions and status line follow the headline. */
+.fx-ready.fx-loading .workspace-actions,
+.fx-ready.fx-loading .data-source-banner { opacity: 0; }
+.fx-ready .workspace-actions.fx-fade { --fx-delay: 260ms; }
+.fx-ready .data-source-banner.fx-fade { --fx-delay: 380ms; }
+
+/* ══════════ Content reveal (scroll and workspace switch) ══════════ */
+.fx-ready .fx-reveal {
+  opacity: 0;
+  transform: translate3d(0, 18px, 0);
+  filter: blur(6px);
+}
+.fx-ready .fx-reveal.fx-in {
+  opacity: 1;
+  transform: none;
+  filter: none;
+  transition:
+    opacity var(--dur-3) var(--ease-premium),
+    transform var(--dur-3) var(--ease-premium),
+    filter var(--dur-3) var(--ease-premium);
+  transition-delay: var(--fx-delay, 0ms);
+}
+/* Once settled, drop the transform so it never fights hover lift or fixed children. */
+.fx-ready .fx-reveal.fx-settled { transform: none; filter: none; transition: none; }
+
+/* KPI cells cascade in after their sheet arrives. */
+.fx-ready .kpi-grid.fx-reveal .kpi-card { opacity: 0; transform: translate3d(0, 8px, 0); }
+.fx-ready .kpi-grid.fx-in .kpi-card {
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--dur-3) var(--ease-premium), transform var(--dur-3) var(--ease-premium);
+}
+.kpi-grid.fx-in .kpi-card:nth-child(1) { transition-delay: calc(var(--fx-delay, 0ms) + 60ms); }
+.kpi-grid.fx-in .kpi-card:nth-child(2) { transition-delay: calc(var(--fx-delay, 0ms) + 100ms); }
+.kpi-grid.fx-in .kpi-card:nth-child(3) { transition-delay: calc(var(--fx-delay, 0ms) + 140ms); }
+.kpi-grid.fx-in .kpi-card:nth-child(4) { transition-delay: calc(var(--fx-delay, 0ms) + 180ms); }
+.kpi-grid.fx-in .kpi-card:nth-child(5) { transition-delay: calc(var(--fx-delay, 0ms) + 220ms); }
+.kpi-grid.fx-in .kpi-card:nth-child(6) { transition-delay: calc(var(--fx-delay, 0ms) + 260ms); }
+.kpi-grid.fx-in .kpi-card:nth-child(7) { transition-delay: calc(var(--fx-delay, 0ms) + 300ms); }
+.kpi-grid.fx-in .kpi-card:nth-child(8) { transition-delay: calc(var(--fx-delay, 0ms) + 340ms); }
+.kpi-grid.fx-in .kpi-card:nth-child(9) { transition-delay: calc(var(--fx-delay, 0ms) + 380ms); }
+
+/* The pane itself no longer needs its own entrance; children carry it. */
+.fx-ready .tab-pane.active { animation: none; }
+
+/* Dialogs and toasts */
+@keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modalIn {
+  from { opacity: 0; transform: translate3d(0, 16px, 0) scale(0.98); filter: blur(6px); }
+  to   { opacity: 1; transform: none; filter: none; }
+}
+.toast-enter { animation: toastIn var(--dur-3) var(--ease-premium) forwards; }
+@keyframes toastIn {
+  from { opacity: 0; transform: translate3d(0, -10px, 0) scale(0.98); filter: blur(4px); }
+  to   { opacity: 1; transform: none; filter: none; }
+}
+
+/* ══════════ Fallbacks ══════════ */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root, [data-theme="light"] { --glass-bg: rgba(255, 255, 255, 0.92); --glass-bg-strong: #ffffff; }
+  [data-theme="dark"] { --glass-bg: rgba(28, 28, 27, 0.94); --glass-bg-strong: #1b1b1a; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before { animation: none; }
+  .fx-ready .fx-reveal, .fx-ready .kpi-grid.fx-reveal .kpi-card { opacity: 1; transform: none; filter: none; }
+  .fx-word > span, .fx-fade { animation: none; }
+  .fx-ready.fx-loading .workspace-actions, .fx-ready.fx-loading .data-source-banner { opacity: 1; }
+  .hospital-card:hover, .roadside-hero-banner:hover { transform: none; }
+}

@@ -1,0 +1,408 @@
+<div align="center">
+
+# 🏥 Smart Emergency Resource Allocation & Hospital Referral System
+
+### *An OS & DBMS Driven Emergency, Hospital Referral and Ambulance Coordination System*
+
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg?style=for-the-badge&logo=github-actions)](https://github.com/aviralmittal7150/SMART-EMERGENCY-RESOURCE-ALLOCATION-HOSPITAL-REFERRAL-SYSTEM)
+[![OS Concepts](https://img.shields.io/badge/OS-Scheduling%20%7C%20Mutex%20%7C%20Banker's%20Algo-blue.svg?style=for-the-badge&logo=linux)](https://github.com/aviralmittal7150/SMART-EMERGENCY-RESOURCE-ALLOCATION-HOSPITAL-REFERRAL-SYSTEM)
+[![DBMS](https://img.shields.io/badge/DBMS-ACID%20%7C%20Row--Level%20Locks-orange.svg?style=for-the-badge&logo=mysql)](https://github.com/aviralmittal7150/SMART-EMERGENCY-RESOURCE-ALLOCATION-HOSPITAL-REFERRAL-SYSTEM)
+[![Concurrency](https://img.shields.io/badge/Concurrency-Zero%20Race%20Conditions-success.svg?style=for-the-badge)](https://github.com/aviralmittal7150/SMART-EMERGENCY-RESOURCE-ALLOCATION-HOSPITAL-REFERRAL-SYSTEM)
+[![License](https://img.shields.io/badge/License-MIT-purple.svg?style=for-the-badge)](LICENSE)
+
+<br/>
+
+> **"Not just the nearest hospital — the nearest suitable hospital that can actually handle the emergency."**
+
+</div>
+
+---
+
+## Current product scope (authoritative)
+
+ERIS has three operational account types:
+
+- **Admin:** registers incidents and victims, confirms triage, selects hospitals and ambulances, and monitors the network.
+- **Hospital:** sees referrals addressed to its own facility, accepts or rejects them, confirms patient arrival, allocates beds, records treatment notes, and completes treatment.
+- **Fleet:** sees its own ambulance and assigned patients, starts/updates its simulated trip, and records pickup/transport actions. Fleet does not create incidents, choose hospitals, or dispatch units.
+
+The incident triage labels are **RED**, **YELLOW**, and **GREEN**. Existing numeric priority values remain an internal scheduling representation for compatibility with stored records (RED maps to 1, YELLOW to 3, GREEN to 4); the user-facing intake uses only the three categories.
+
+Ambulance movement is **simulated**, not live GPS. The configured operating area is Dehradun, Uttarakhand. The quick demo uses the in-memory store and loses its data on restart; persistent operation requires a configured MySQL database and applied migrations.
+
+The Banker's Algorithm page is an offline teaching simulator and is separate from the live dispatch workflow.
+
+---
+
+## 📌 1. Executive Summary
+
+During critical medical emergencies, the nearest hospital is often **not** the best destination. A facility 2 km away might have zero open ICU beds, no on-call interventional cardiologist, or an occupied emergency operating theatre (OT). Patients routed blindly by distance waste the golden hour in transfers.
+
+The **Smart Emergency Resource Allocation & Hospital Referral System** solves this by uniting **Database Management Systems (DBMS)** with **Operating Systems (OS)** scheduling and synchronization principles. The system matches patients based on clinical resource demands, prioritizes severe triage cases, guarantees mutual exclusion on scarce beds, and prevents resource deadlocks.
+
+---
+
+## 🏛️ 2. High-Level System Architecture
+
+```mermaid
+flowchart TB
+    subgraph INGESTION["🚨 1. Emergency Ingestion & Triage"]
+        A["Caller / EMS Dispatch"] -->|"Patient Vitals & Symptoms"| B["Triage Priority Engine\n(Priority Queue: RED / YELLOW / GREEN)"]
+        B --> C["Required Resource Resolver\n(ICU Bed, Ventilator, Neuro, OT)"]
+    end
+
+    subgraph ENGINE["⚙️ 2. OS Allocation & Ranking Engine"]
+        C --> D["Hard Constraint Filter\n(Capacity > 0 & Status == OPEN)"]
+        D --> E["Hospital Suitability Scorer\n(Resource Fit + Acceptance + Capacity + Distance)"]
+        E --> F["Ranked Candidate Queue"]
+    end
+
+    subgraph DBMS_LAYER["💾 3. DBMS & Concurrency Control Layer"]
+        F -->|"Acquire 90s Soft-Lock"| G[("Central MySQL Registry\nSELECT ... FOR UPDATE")]
+        G -->|"Alert Hospital Terminal"| H{"Hospital Response?"}
+        H -->|"ACCEPTED"| I["Commit Atomic Allocation\n(available_capacity - 1)"]
+        H -->|"REJECTED / TIMEOUT"| J["Release Soft-Lock\n(Failover to Rank #2)"]
+        J --> F
+    end
+
+    subgraph DISPATCH["🚑 4. Logistics & Closed-Loop Lifecycle"]
+        I --> K["Ambulance Dispatch & Simulated Route Tracking"]
+        K --> L["Patient Arrival & In-Treatment"]
+        L --> M["Treatment Complete -> Release Resource"]
+        M --> N[("Immutable Audit History & Analytics")]
+    end
+
+    style INGESTION fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#fff
+    style ENGINE fill:#1e293b,stroke:#a855f7,stroke-width:2px,color:#fff
+    style DBMS_LAYER fill:#1e293b,stroke:#f59e0b,stroke-width:2px,color:#fff
+    style DISPATCH fill:#1e293b,stroke:#10b981,stroke-width:2px,color:#fff
+```
+
+---
+
+## 🔄 3. Emergency Process State Lifecycle (OS State Machine)
+
+Just as an Operating System transitions processes through lifecycle states, emergency referral requests transition through a formal finite state machine:
+
+```mermaid
+stateDiagram-v2
+    [*] --> NEW: 1. Emergency Triggered
+    NEW --> WAITING: 2. Triage Level Assigned & Enqueued
+    WAITING --> MATCHING: 3. Hospital DB Search & Suitability Scored
+    MATCHING --> PENDING_ACCEPTANCE: 4. Soft Lock Placed (90s TTL) & Hospital Alerted
+    
+    PENDING_ACCEPTANCE --> ALLOCATED: 5a. Hospital ACCEPTS (Lock Committed)
+    PENDING_ACCEPTANCE --> MATCHING: 5b. Hospital REJECTS / TIMEOUT (Lock Released & Next Hospital)
+    
+    ALLOCATED --> IN_TRANSIT: 6. Ambulance Dispatched
+    IN_TRANSIT --> IN_TREATMENT: 7. Patient Arrives at Facility
+    IN_TREATMENT --> COMPLETED: 8. Treatment Finished & Resources Released
+    COMPLETED --> [*]
+```
+
+---
+
+## 🧠 4. OS & DBMS Concept Matrix
+
+| Computer Science Concept | OS / DBMS Mechanism | Real-World Healthcare Application |
+| :--- | :--- | :--- |
+| **Priority Scheduling** | Preemptive Multi-Level Priority Queue | Resuscitation cases (Triage 1) preempt urgent/stable cases in resource evaluation. |
+| **Mutual Exclusion (Mutex)** | Row-Level Locks (`SELECT ... FOR UPDATE`) | Prevents simultaneous double-booking of a single remaining ICU bed or ventilator. |
+| **Process Synchronization** | Soft Lock + 90s Countdown Handshake | Synchronizes hospital acceptance before ambulance wheels roll, avoiding futile patient routing. |
+| **Deadlock Avoidance** | **Banker's Algorithm** (Safe Sequence Check) | Evaluates multi-resource claims (ICU + Ventilator + Neuro Specialist) to avoid hospital gridlock. |
+| **ACID Atomicity & Rollback** | Transactional Commit / Rollback | Automatically reverts temporary reservations if hospital rejects or transfer fails. |
+| **Resource Release** | Deallocation Hook | Automatically returns beds and specialists to the available pool upon patient discharge. |
+
+---
+
+## 🔒 5. Banker's Algorithm Safe-State Workflow
+
+When multiple emergencies require compound scarce resources, the system computes the safety state to guarantee system viability:
+
+```mermaid
+flowchart LR
+    A["Incoming Claim\nRequest: [ICU:1, Vent:1, Doc:1]"] --> B{"Is Request <=\nAvailable Capacity?"}
+    B -- No --> C["❌ Block / Defer / Reroute\n(Avoid Deadlock)"]
+    B -- Yes --> D["Simulate Allocation\nAvailable' = Available - Request\nAllocated' = Allocated + Request"]
+    D --> E{"Banker's Safe State?\nFind Safe Sequence P0...Pn"}
+    E -- Safe Sequence Found --> F["✅ Grant Lock & Commit"]
+    E -- Unsafe State Detected --> G["⚠️ Deny Immediate Lock\nReroute to Alternative Hospital"]
+    
+    style A fill:#334155,stroke:#94a3b8,color:#fff
+    style C fill:#7f1d1d,stroke:#ef4444,color:#fff
+    style F fill:#064e3b,stroke:#10b981,color:#fff
+    style G fill:#78350f,stroke:#f59e0b,color:#fff
+```
+
+---
+
+## 📊 6. Hospital Suitability Ranking Formula
+
+Instead of sorting purely by physical distance, the matching engine computes a multi-attribute weighted score:
+
+$$\mathbf{Suitability\ Score} = (0.40 \times \mathbf{RF}) + (0.25 \times \mathbf{AR}) + (0.20 \times \mathbf{CC}) + (0.15 \times \mathbf{DP})$$
+
+Where:
+- **$\mathbf{RF}$ (Resource Fit - 40%):** Matches required equipment (ICU beds, pediatric ventilators, trauma OTs, cardiology staff). Any missing mandatory requirement immediately drops score to $0$.
+- **$\mathbf{AR}$ (Acceptance & Response Rate - 25%):** Historical percentage of referrals accepted and average response latency ($< 60\text{s}$).
+- **$\mathbf{CC}$ (Critical Capacity - 20%):** Ratio of available critical beds vs total capacity (penalizes saturated hospitals).
+- **$\mathbf{DP}$ (Distance Proximity - 15%):** Normalized distance / estimated transit duration.
+
+---
+
+## 🗄️ 7. Entity Relationship Schema (DBMS)
+
+```mermaid
+erDiagram
+    HOSPITAL ||--o{ DOCTOR : employs
+    HOSPITAL ||--o{ MEDICAL_RESOURCE : owns
+    HOSPITAL ||--o{ AMBULANCE : stations
+    HOSPITAL ||--o{ HOSPITAL_ACCEPTANCE : receives
+    PATIENT ||--o{ EMERGENCY_REQUEST : initiates
+    EMERGENCY_REQUEST ||--o{ RESOURCE_ALLOCATION : claims
+    EMERGENCY_REQUEST ||--o{ HOSPITAL_ACCEPTANCE : targets
+    EMERGENCY_REQUEST ||--o{ EMERGENCY_HISTORY : logs
+    MEDICAL_RESOURCE ||--o{ RESOURCE_ALLOCATION : allocated_in
+
+    HOSPITAL {
+        int hospital_id PK
+        string hospital_name
+        decimal latitude
+        decimal longitude
+        enum emergency_status "OPEN | LIMITED | CLOSED"
+        decimal rating
+    }
+
+    MEDICAL_RESOURCE {
+        int resource_id PK
+        int hospital_id FK
+        enum resource_type "ICU_BED | VENTILATOR | OT | SPECIALIST"
+        int total_capacity
+        int available_capacity
+        int locked_capacity
+        int version_lock
+    }
+
+    EMERGENCY_REQUEST {
+        int request_id PK
+        int patient_id FK
+        enum emergency_type "CARDIAC | TRAUMA | STROKE | RESPIRATORY"
+        int priority "1 (Highest) to 5 (Lowest)"
+        enum status "NEW | WAITING | ALLOCATED | IN_TREATMENT | COMPLETED"
+        datetime request_time
+    }
+
+    RESOURCE_ALLOCATION {
+        int allocation_id PK
+        int request_id FK
+        int resource_id FK
+        enum status "LOCKED | COMMITTED | RELEASED"
+        datetime allocated_at
+        datetime released_at
+    }
+```
+
+---
+
+## 🚀 8. Quick Start & Local Setup
+
+### 8.0 Run on a Mac — exact commands (demo mode)
+
+Requirements: **Node.js 22** (`node -v`), npm, Google Chrome. Internet access is needed for the OpenStreetMap
+tiles and road routes (without it the map tiles do not load and routes fall back to straight lines labelled
+"Simulated route").
+
+```bash
+cd ~/Downloads/ERIS-integration
+npm ci
+DB_USE_MEMORY=true NODE_ENV=development PORT=5050 FRONTEND_URL=http://localhost:5050 npm start
+```
+
+Open **http://localhost:5050**. Stop with `Ctrl+C`. Demo mode keeps all data in memory: restarting the
+server resets it.
+
+| Portal | Username | Password |
+|---|---|---|
+| Admin (dispatch, Live tracking, Mass casualty, hospital overview, audit) | `admin` | `admin123` |
+| Hospital desk (H-101; also `stjude_desk`, `fortis_desk`, `memorial_desk`, `maxlife_desk`) | `apex_desk` | `hospital123` |
+| Fleet / ambulance crew (UNIT-402 crews AMB-01; also `UNIT-601`) | `UNIT-402` | `paramedic123` |
+
+These are fictional demo accounts; they are refused when `NODE_ENV=production`. Five wrong passwords lock a
+username for 15 minutes. The operating city is **Dehradun** only: pickups outside it are refused.
+
+**Ambulance + treatment demo (≈2 minutes):** open three browser windows.
+1. `admin` → **Live tracking** → **Load sample demo trip** → **Start Demo**. The ambulance (simulated, not GPS)
+   drives the Dehradun road route to the patient, then to the hospital.
+2. `UNIT-402` (Fleet) → **Live tracking**: the same trip moves live; press **Patient Picked Up** at the patient.
+3. `apex_desk` (Hospital) → **Patients**: **Confirm arrival** → **Allocate bed** (e.g. `ICU-3`) →
+   **Start treatment** → **Complete treatment**. The Admin window updates live at every step.
+
+**Bus crash (mass casualty) demo:** `admin` → **Mass casualty** → **Load bus crash demo** (12 victims:
+2 RED, 4 YELLOW, 6 GREEN; unnamed victims are MCI-001…) → **Send all referrals** → each hospital desk accepts
+in **Acceptance**; victims without a suitable hospital are marked **Needs escalation**.
+
+**Tests:** `npm test` (unit/API, in-memory); MySQL tests need `.env.local` with the `MYSQL_TEST_*` settings
+(section 8.5) and run with `REQUIRE_MYSQL_TESTS=true npm test` and `npm run test:mysql`. Browser tests:
+`node e2e/frontend-smoke.mjs`, `PORTALS_PART=all node e2e/portals.mjs`, `node e2e/tracking.mjs`,
+`B5_BACKEND=memory node e2e/batch5/journeys.mjs`, `node e2e/batch8.mjs`.
+
+**MySQL instead of memory:** create an empty database and user with your own MySQL admin login, put
+`DB_USE_MEMORY=false` and the `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASS` values in `.env`, then
+`npm run db:seed` (schema + demo data, refused for production) and
+`NODE_ENV=development PORT=5050 FRONTEND_URL=http://localhost:5050 npm start`.
+
+### 8.1 Prerequisites
+- **Node.js:** v18.0.0 or later
+- **MySQL:** v8.0 or PostgreSQL
+- **Git**
+
+### 8.2 Installation
+
+```bash
+# 1. Clone repository
+git clone https://github.com/aviralmittal7150/SMART-EMERGENCY-RESOURCE-ALLOCATION-HOSPITAL-REFERRAL-SYSTEM.git
+
+# 2. Enter directory
+cd "SMART EMERGENCY RESOURCE ALLOCATION & HOSPITAL REFERRAL SYSTEM"
+
+# 3. Install dependencies
+npm install
+
+# 4. Configure environment variables
+cp .env.example .env
+```
+
+### 8.3 Run Concurrency & OS Test Suite
+
+```bash
+# Execute unit, integration, and concurrency stress tests
+npm test
+```
+
+### 8.4 Start Development Server
+
+```bash
+# Option A: Run Full Stack Server (API + WebSockets + Static Frontend)
+npm start
+# Server listening at http://localhost:4000
+
+# Option B: Run via Docker Container
+docker-compose up --build
+# Containerized app running at http://localhost:4000
+
+# Option C: Run Lightweight Static Frontend Dev Server
+npm run dev
+# Server listening at http://localhost:3000
+```
+
+### 8.5 Storage modes: in-memory demo vs MySQL
+
+The API runs on exactly one storage backend, chosen **explicitly** by `DB_USE_MEMORY` (see `.env.example`):
+
+| | `DB_USE_MEMORY=true` (demo) | `DB_USE_MEMORY=false` (MySQL) |
+| :--- | :--- | :--- |
+| Persistence | **None.** All data is lost on restart. | Persistent; survives restarts. |
+| Processes | One only (state lives in process memory). | Many may share one database. |
+| Locking | In-process mutexes and timers. | InnoDB transactions, `SELECT ... FOR UPDATE`, sorted lock order, persisted 90 s expiry. |
+| Atomicity | Each operation is atomic within the single process. | Each operation is one database transaction (state change, resource accounting and audit row together). |
+| Use for | Demos, UI work, unit tests. | Anything that must not lose or double-allocate resources. |
+
+Rules the server enforces:
+- With `NODE_ENV=production`, `DB_USE_MEMORY` **must** be set. There is no implicit default.
+- In MySQL mode, if the database is unreachable, the credentials are rejected, or the schema is out of date, the server **refuses to start**. It never falls back to the in-memory store.
+- MySQL mode has no default host, user or database: set `DB_HOST`, `DB_NAME`, `DB_USER` (and `DB_PASS`, required in production). Use a dedicated least-privilege user, not `root`.
+
+Setting up a MySQL database (non-destructive: tables are created only if missing, nothing is dropped):
+
+```bash
+# 1. Create an empty database and a user for it (once, with your own admin credentials)
+# 2. Put DB_USE_MEMORY=false and the DB_* values in .env
+npm run db:init      # create the schema
+npm run db:seed      # optional: demo hospitals, doctors, ambulances and cases (only if the database has no hospitals);
+                     # the fictional demo logins are added only when NODE_ENV is not production
+npm run user:create -- --username <name> --role ADMIN   # a real account; the password is read from stdin, never echoed
+npm start            # the startup log states the active storage mode
+```
+
+If you point the app at a database created from an older `schema.sql`, startup fails with a list of what is missing; see `server/db/migrations/001_referral_lifecycle.sql` (additive, run manually).
+
+Login accounts live in the `SystemUser` table (bcrypt hashes; in memory mode, the fictional demo accounts). Demo accounts are refused when `NODE_ENV=production`, and a production server refuses to start without an active non-demo account; create real ones with `npm run user:create` (MySQL; see `scripts/user-create.js`). Outside production, `npm run db:seed-demo-users` adds only the demo accounts to an existing database. Known limit: the MySQL integration tests run only against a dedicated database whose name ends in `_test` (`npm run test:mysql`; they are skipped when it is not configured).
+
+---
+
+## 🧪 9. Concurrency & Stress Verification Matrix
+
+```bash
+# Execute Full Automated Test Suite (49 / 49 Passing Tests, 100% Pass Rate):
+npm test
+
+# Execute Individual Specialized Subsystems:
+npm run test:concurrency   # P3-01: 100-Thread Mass Casualty Stress Engine
+npm run test:compound      # P3-02: 4-Vector Compound Claims Banker's Deadlock Engine
+npm run test:audit         # P3-04: SHA-256 Sealed Medico-Legal Audit Ledger
+```
+
+| Test Suite | Scenario Tested | Target Assertion | Result |
+| :--- | :--- | :--- | :---: |
+| `unit/scoring` | Suitability score weighted calculation | Correct weights and exclusion on missing resource | ✅ **PASS** |
+| `unit/priority` | Min-heap Priority Queue triage ordering | Priority 1 cases precede Priority 3 | ✅ **PASS** |
+| `integration/handshake` | 90s Soft Lock & Acceptance flow | Row lock held $\to$ Committed upon accept | ✅ **PASS** |
+| `integration/failover` | Hospital rejection & timeout auto-routing | Lock released $\to$ Immediate failover to Rank 2 | ✅ **PASS** |
+| `concurrency/mutex` | **100 concurrent threads claiming 1 ICU bed** | **Zero double-allocations (1 winner, 99 rerouted)** | ✅ **PASS** |
+| `simulation/bankers` | 4-Vector Compound claim safe sequence | Detects unsafe state and avoids deadlock | ✅ **PASS** |
+| `ledger/integrity` | Cryptographic SHA-256 block chain seal | Zero tampering detected & valid CSV export | ✅ **PASS** |
+
+**Summary:** `49 / 49 Passed (100% Pass Rate across Unit, Integration, Concurrency & Simulation)`
+
+---
+
+## 📂 10. Repository Documentation Index
+
+| File | Description |
+| :--- | :--- |
+| 🎓 **[VIVA_DEFENSE_GUIDE.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/VIVA_DEFENSE_GUIDE.md)** | Complete Academic Viva Defense Guide: OS/DBMS theory questions, demo script, and examiner Q&A. |
+| 📘 **[PRD.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/PRD.md)** | Complete Product Requirements Document with full data schema and non-functional specifications. |
+| 🔄 **[WORKFLOW.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/WORKFLOW.md)** | End-to-end task workflows, GitHub Issue templates, and Pull Request guidelines. |
+| 🗺️ **[PROJECT_ROADMAP.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/PROJECT_ROADMAP.md)** | Master Project Roadmap detailing Phases 1, 2, and 3 engineering milestones (100% Complete). |
+| 🤖 **[AGENTS.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/AGENTS.md)** | AI Agent & Contributor operating handbook with strict OS/DBMS mandates. |
+| 📋 **[.github/pull_request_template.md](file:///Users/aviralmittal/Downloads/SMART%20EMERGENCY%20RESOURCE%20ALLOCATION%20&%20HOSPITAL%20REFERRAL%20SYSTEM/.github/pull_request_template.md)** | Standard Pull Request template with mandatory test matrix. |
+
+---
+
+## 🎯 11. Viva & Academic Defense Highlights
+
+<details>
+<summary><b>💬 Click to view 1-Minute Viva Elevator Pitch</b></summary>
+
+> *"Our project is a **Smart Emergency Resource Allocation and Hospital Referral System**. In medical emergencies, routing patients to the nearest hospital often fails when that hospital lacks an open ICU bed, ventilator, or specialist. Our **DBMS** stores real-time registries of hospitals, equipment, doctors, ambulances, and audit trails. Our **OS engine** applies Priority Scheduling for patient triage, Mutual Exclusion to prevent double-allocations, and Banker's Algorithm to avoid multi-resource deadlocks. The system delivers closed-loop acceptance before transit, ensuring patients reach the nearest **suitable** facility."*
+
+</details>
+
+<details>
+<summary><b>❓ Key Viva Questions Answered</b></summary>
+
+1. **How do you handle race conditions?**  
+   *Through DBMS row-level locks (`SELECT ... FOR UPDATE`) and temporary 90-second soft-locks with automatic rollback.*
+2. **Why not just choose the closest hospital?**  
+   *Proximity is useless if the hospital lacks critical resources. Our multi-factor algorithm scores resource fit (40%), acceptance rate (25%), capacity (20%), and distance (15%).*
+3. **Where is the Banker's Algorithm used?**  
+   *When high-severity patients require bundles of scarce resources (e.g. ICU Bed + Ventilator + Trauma Surgeon), the Banker's Algorithm verifies that allocating those resources will not place the regional hospital cluster into an unsafe, deadlock state.*
+
+</details>
+
+---
+
+## 🛡️ 12. Safety Boundary Declaration
+
+> [!IMPORTANT]
+> **Operational Scope:** This software is an administrative resource management and logistics coordination platform. It **does not** provide automated medical diagnosis or clinical prescription. Final patient acceptance and treatment plans remain exclusively under the clinical discretion of licensed medical professionals.
+
+---
+
+<div align="center">
+  <sub>Built with ❤️ for Computer Science & Healthcare Logistics Engineering.</sub>
+</div>
+
+## Offline simulated demonstration
+
+ERIS runs with fictional demo patients, hospitals, ambulances, incidents, beds, and treatment records scoped to a small Dehradun operating area. Ambulance movement and routes are simulated locally. External routing and map-tile requests are disabled by default; no live GPS, real patient data, or real hospital feeds are used. Dehradun locality coordinates provide only a small geographic frame; all facilities, operational records, availability, and movement are fictional. The map is a local schematic for demonstration, not a navigational street map.

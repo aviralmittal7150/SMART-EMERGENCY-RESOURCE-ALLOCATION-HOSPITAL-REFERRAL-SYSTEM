@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  emergency-system:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smart_emergency_system
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=4000
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in your shell or .env before starting}
+      - FRONTEND_URL=http://localhost:4000
+      # Storage mode is explicit. Production uses MySQL: provide DB_HOST/DB_NAME/DB_USER/DB_PASS (see
+      # .env.example) and at least one real account (`npm run user:create`); without them the app refuses
+      # to start instead of silently falling back. The non-persistent in-memory DEMO store (demo logins,
+      # data lost on restart) needs DB_USE_MEMORY=true NODE_ENV=development.
+      - DB_USE_MEMORY=${DB_USE_MEMORY:-false}
+      - DB_HOST=${DB_HOST:-}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_NAME=${DB_NAME:-}
+      - DB_USER=${DB_USER:-}
+      - DB_PASS=${DB_PASS:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

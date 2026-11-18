@@ -1,0 +1,25 @@
+{
+  "name": "smoke",
+  "version": 1,
+  "description": "Small, fast scenario for CI and the harness's own tests: 24 cases, 3 hospitals (one closed). Fictional data.",
+  "seed": 424242,
+  "cases": 24,
+  "concurrency": 8,
+  "poolSize": 10,
+  "runs": 1,
+  "maxHospitalsTried": 3,
+  "caseMix": { "CARDIAC": 30, "TRAUMA": 25, "RESPIRATORY": 25, "GENERAL": 20 },
+  "priorities": { "1": 40, "2": 40, "3": 20 },
+  "decisions": { "accept": 60, "reject": 25, "expire": 15 },
+  "outcomes": { "complete": 50, "cancel": 25, "keep": 25 },
+  "fixture": {
+    "hospitals": [
+      { "hospital_id": "SIM-S1", "emergency_status": "OPEN", "acceptance_rate": 0.9, "avg_response_sec": 30,
+        "capacity": { "ICU_BED": 4, "VENTILATOR": 3, "OT": 2 }, "specialists": ["CARDIOLOGIST", "TRAUMA_SURGEON"], "ambulances": 2 },
+      { "hospital_id": "SIM-S2", "emergency_status": "OPEN", "acceptance_rate": 0.8, "avg_response_sec": 40,
+        "capacity": { "ICU_BED": 3, "VENTILATOR": 2, "OT": 1 }, "specialists": ["CARDIOLOGIST"], "ambulances": 1 },
+      { "hospital_id": "SIM-S3", "emergency_status": "CLOSED", "acceptance_rate": 0.7, "avg_response_sec": 50,
+        "capacity": { "ICU_BED": 3, "VENTILATOR": 2, "OT": 1 }, "specialists": ["TRAUMA_SURGEON"], "ambulances": 1 }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+# Local secrets must never be copied into an image: every .env* file (.env, .env.local, .env.production, ...)
+# is excluded; only the placeholder template .env.example is kept.
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+.DS_Store
+coverage
+tests
+# Browser tests and their output (the e2e server helper and screenshots) are not part of the image.
+e2e
+.github
+*.md
