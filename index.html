@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ERIS — Emergency Resource Intelligence System</title>
+  <meta name="description" content="Routes each emergency to the nearest hospital that can actually treat it, using OS scheduling, mutual exclusion and DBMS transactions.">
+  <meta name="author" content="Aviral Mittal">
+  <meta name="theme-color" content="#f5f1ec">
+  <!-- API origin override for development only. Empty = same origin (the Express server serves this page). -->
+  <meta name="eris-api-origin" content="">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="css/main.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/animations.css">
+  <link rel="stylesheet" href="css/operations.css">
+  <link rel="stylesheet" href="css/effects.css">
+  <link rel="stylesheet" href="css/app.css">
+  <!-- Leaflet from the CDN, pinned by Subresource Integrity (hashes of the published 1.9.4 build). -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f5f1ec'/%3E%3Crect x='6' y='7' width='3.5' height='18' rx='1' fill='%23c41c1c'/%3E%3Crect x='10.5' y='7' width='3.5' height='18' rx='1' fill='%23fe4c02'/%3E%3Crect x='15' y='7' width='3.5' height='18' rx='1' fill='%23e0a800'/%3E%3Crect x='19.5' y='7' width='3.5' height='18' rx='1' fill='%230bdf50'/%3E%3Crect x='24' y='7' width='3.5' height='18' rx='1' fill='%2365b5ff'/%3E%3C/svg%3E">
+</head>
+<body class="signed-out booting">
+  <a class="skip-link" href="#mainContent">Skip to workspace</a>
+  <div id="globalNotificationBanner" role="status" aria-live="polite" hidden></div>
+
+  <div class="app-container" id="appContainer">
+    <!-- ═══════════ HEADER ═══════════ -->
+    <header class="top-navbar" id="siteHeader">
+      <div class="header-bar shell">
+        <div class="brand-section">
+          <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <div class="brand-title"><strong>ERIS</strong><span>Emergency operations</span></div>
+        </div>
+
+        <div class="top-meta">
+          <div class="live-indicator" id="liveIndicator" title="Live connection to the ERIS server">
+            <span class="pulse-dot"></span>
+            <span id="connectionStatus">Not connected</span>
+          </div>
+          <div id="systemClock" class="system-clock" aria-label="Local time">--:--:--</div>
+          <div id="userProfileBadge" class="user-profile-badge">
+            <span id="userRoleTitle">Signed out</span>
+            <button id="logoutBtn" class="btn-xs-outline" type="button">Sign out</button>
+          </div>
+          <button id="themeToggleBtn" class="theme-toggle-btn" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
+            <span class="theme-toggle-icon" id="themeToggleIcon" aria-hidden="true"></span>
+            <span class="theme-toggle-text sr-only" id="themeToggleText">Dark mode</span>
+          </button>
+          <button id="navMenuBtn" class="nav-menu-btn" type="button" aria-expanded="false" aria-controls="primaryNav" aria-label="Open workspace menu">
+            <span class="nav-menu-icon" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+
+      <nav class="nav-tabs shell" id="primaryNav" aria-label="Workspaces">
+        <button class="nav-tab-btn active" data-tab="tab-command" id="nav-command" type="button" data-roles="ADMIN">Command center</button>
+        <span class="nav-sep" aria-hidden="true"></span>
+        <button class="nav-tab-btn" data-tab="tab-ingestion" id="nav-emergency" type="button" data-roles="ADMIN HOSPITAL_DESK">Cases</button>
+        <button class="nav-tab-btn" data-tab="tab-ranking" id="nav-ranking" type="button" data-roles="ADMIN">Recommendation</button>
+        <button class="nav-tab-btn" data-tab="tab-roadside" id="nav-roadside" type="button" data-roles="ADMIN">Roadside</button>
+        <button class="nav-tab-btn" data-tab="tab-mci" id="nav-mci" type="button" data-roles="ADMIN">Mass casualty</button>
+        <button class="nav-tab-btn" data-tab="tab-acceptance" id="nav-acceptance" type="button" data-roles="ADMIN HOSPITAL_DESK">Acceptance</button>
+        <span class="nav-sep" aria-hidden="true"></span>
+        <button class="nav-tab-btn" data-tab="tab-hospitals" id="nav-hospitals" type="button">Hospitals</button>
+        <button class="nav-tab-btn" data-tab="tab-ambulance" id="nav-ems" type="button" data-roles="ADMIN HOSPITAL_DESK PARAMEDIC">Fleet</button>
+        <button class="nav-tab-btn" data-tab="tab-map" id="nav-map" type="button" data-roles="ADMIN HOSPITAL_DESK">Map</button>
+        <button class="nav-tab-btn" data-tab="tab-tracking" id="nav-tracking" type="button" data-roles="ADMIN HOSPITAL_DESK PARAMEDIC">Live tracking</button>
+        <button class="nav-tab-btn" data-tab="tab-doctors" id="nav-doctors" type="button" data-roles="ADMIN HOSPITAL_DESK">Specialists</button>
+        <span class="nav-sep" aria-hidden="true"></span>
+        <button class="nav-tab-btn" data-tab="tab-activity" id="nav-activity" type="button" data-roles="ADMIN">Audit</button>
+        <button class="nav-tab-btn" data-tab="tab-analytics" id="nav-analytics" type="button" data-roles="ADMIN">My registered patients</button>
+        <button class="nav-tab-btn" data-tab="tab-accounts" id="nav-accounts" type="button" data-roles="ADMIN">Accounts</button>
+        <button class="nav-tab-btn" data-tab="tab-bankers" id="nav-bankers" type="button">Banker's simulator</button>
+        <button class="nav-tab-btn" data-tab="tab-firstaid" id="nav-firstaid" type="button" data-roles="ADMIN HOSPITAL_DESK PARAMEDIC">First aid</button>
+      </nav>
+    </header>
+
+    <main id="mainContent" class="main-content" tabindex="-1">
+      <section class="hero" aria-labelledby="workspaceTitle">
+        <div class="shell">
+          <div class="workspace-header">
+            <div class="hero-copy">
+              <h1 id="workspaceTitle">Command center</h1>
+              <p id="workspaceDescription">Monitor demand, capacity, referrals and dispatch readiness across the network.</p>
+            </div>
+            <div class="workspace-actions">
+              <button type="button" class="btn btn-secondary" id="refreshWorkspaceBtn">Refresh data</button>
+              <button type="button" class="btn btn-emergency" data-navigate="tab-ingestion" data-roles="ADMIN">New emergency</button>
+            </div>
+          </div>
+          <div id="dataSourceBanner" class="data-source-banner" role="status" hidden>
+            <span class="data-source-icon" aria-hidden="true">!</span>
+            <div><strong id="dataBannerTitle">Data unavailable</strong><span id="dataBannerText"></span></div>
+            <button type="button" class="btn btn-secondary btn-sm" id="dataBannerRetry">Retry</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="workspace-body shell">
+
+      <!-- ═══════════ Cases: intake + queue + case tracker ═══════════ -->
+      <section id="tab-ingestion" class="tab-pane" data-roles="ADMIN HOSPITAL_DESK">
+        <div class="grid-2col">
+          <div class="panel" id="intakePanel" data-roles="ADMIN">
+            <div class="panel-header">
+              <div>
+                <span class="panel-title">Register an emergency</span>
+                <p class="panel-caption">Registers the patient and the emergency; the case joins the priority queue at once.</p>
+              </div>
+              <span class="panel-badge">POST /emergencies</span>
+            </div>
+
+            <form id="emergencyIntakeForm" novalidate>
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label class="form-label" for="patientName">Patient name</label>
+                  <input type="text" id="patientName" class="form-input" maxlength="150" placeholder="Full name, or 'Unknown'" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="patientAge">Age</label>
+                  <input type="number" id="patientAge" class="form-input" min="0" max="130" step="1" placeholder="Years" required>
+                </div>
+              </div>
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label class="form-label" for="patientGender">Sex</label>
+                  <select id="patientGender" class="form-select">
+                    <option value="UNKNOWN" selected>Unknown</option>
+                    <option value="FEMALE">Female</option>
+                    <option value="MALE">Male</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="contactPhone">Contact phone (optional)</label>
+                  <input type="tel" id="contactPhone" class="form-input" maxlength="30" autocomplete="off">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="emergencyTypeSelect">Suspected emergency</label>
+                <select id="emergencyTypeSelect" class="form-select">
+                  <option value="CARDIAC" selected>Acute coronary or cardiac arrest</option>
+                  <option value="TRAUMA">Trauma or road accident</option>
+                  <option value="POLYTRAUMA">Polytrauma (staged treatment)</option>
+                  <option value="STROKE">Ischaemic or haemorrhagic stroke</option>
+                  <option value="RESPIRATORY">Severe respiratory distress</option>
+                  <option value="PEDIATRIC">Paediatric emergency</option>
+                  <option value="GENERAL">General emergency or other</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <span class="form-label" id="triageLabel">Triage priority</span>
+                <div class="triage-selector" role="radiogroup" aria-labelledby="triageLabel">
+                  <button type="button" class="triage-btn triage-red active" data-category="RED" role="radio" aria-checked="true"><span class="triage-level-num">RED</span><span class="triage-level-desc">Immediate</span></button>
+                  <button type="button" class="triage-btn triage-yellow" data-category="YELLOW" role="radio" aria-checked="false"><span class="triage-level-num">YELLOW</span><span class="triage-level-desc">Urgent / delayed</span></button>
+                  <button type="button" class="triage-btn triage-green" data-category="GREEN" role="radio" aria-checked="false"><span class="triage-level-num">GREEN</span><span class="triage-level-desc">Minor</span></button>
+                </div>
+                <p class="field-caption" id="triageRecommendationInfo"></p>
+              </div>
+
+              <div class="form-group">
+                <span class="form-label" id="resourceLabel">Resources the hospital must have</span>
+                <div class="resource-tag-grid" role="group" aria-labelledby="resourceLabel">
+                  <button type="button" class="resource-chip" data-resource="ICU_BED" aria-pressed="false">ICU bed</button>
+                  <button type="button" class="resource-chip" data-resource="VENTILATOR" aria-pressed="false">Ventilator</button>
+                  <button type="button" class="resource-chip" data-resource="OT" aria-pressed="false">Emergency OT</button>
+                </div>
+                <p class="field-caption">Locked chips are required for this emergency type; you can add others.</p>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="specialistSelect">Specialist required</label>
+                <select id="specialistSelect" class="form-select">
+                  <option value="">None</option>
+                  <option value="CARDIOLOGIST">Cardiologist</option>
+                  <option value="NEUROLOGIST">Neurologist</option>
+                  <option value="TRAUMA_SURGEON">Trauma surgeon</option>
+                  <option value="PEDIATRICIAN">Paediatrician</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="pickupLocality">Dehradun locality</label>
+                <select id="pickupLocality" class="form-select locality-select" data-lat="pickupLat" data-lng="pickupLng"><option value="">Choose a locality, or type the coordinates</option></select>
+              </div>
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label class="form-label" for="pickupLat">Pickup latitude (optional)</label>
+                  <input type="number" id="pickupLat" class="form-input" step="any" min="-90" max="90" placeholder="e.g. 30.3165">
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="pickupLng">Pickup longitude (optional)</label>
+                  <input type="number" id="pickupLng" class="form-input" step="any" min="-180" max="180" placeholder="e.g. 78.0322">
+                </div>
+              </div>
+              <div class="form-row-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btnUseGpsLocation">Use my location</button>
+                <span class="field-caption" id="gpsStatus"></span>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="emergencyNotes">Clinical notes and vitals</label>
+                <textarea id="emergencyNotes" class="form-textarea" rows="2" maxlength="20000" placeholder="e.g. BP 85/50, SpO2 88%, chest pain radiating to left arm"></textarea>
+              </div>
+
+              <div id="intakeError" class="form-error" role="alert" hidden></div>
+              <button type="submit" class="btn btn-emergency btn-block btn-lg" id="intakeSubmitBtn">Register emergency</button>
+            </form>
+          </div>
+
+          <div class="panel" id="openCasePanel" data-roles="ADMIN">
+            <div class="panel-header">
+              <div>
+                <span class="panel-title">Open a case</span>
+                <p class="panel-caption">Any case, by its ID. Cases you registered are listed under My registered patients; the command center lists the highest-risk active cases.</p>
+              </div>
+            </div>
+            <form id="openCaseForm" class="open-case-form" novalidate>
+              <label class="form-label" for="openCaseId">Case ID</label>
+              <div class="row">
+                <input id="openCaseId" class="form-input" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="e.g. REQ-1234">
+                <button id="openCaseBtn" class="btn btn-primary" type="submit">Open in tracker</button>
+              </div>
+              <p id="openCaseError" class="form-error" role="alert" hidden></p>
+            </form>
+          </div>
+
+          <div class="panel" id="queuePanel" data-roles="HOSPITAL_DESK">
+            <div class="panel-header">
+              <div>
+                <span class="panel-title">Priority queue</span>
+                <p class="panel-caption">Ordered by the server: priority first, then arrival. Select a case to track it.</p>
+              </div>
+              <span class="panel-badge">GET /emergencies</span>
+            </div>
+
+            <div class="filter-bar" aria-label="Emergency queue filters">
+              <label class="filter-field search-field"><span class="sr-only">Search emergencies</span><input id="emergencySearch" class="form-input" type="search" placeholder="Search ID, patient or condition"></label>
+              <label class="filter-field"><span class="sr-only">Filter by priority</span><select id="emergencyPriorityFilter" class="form-select"><option value="ALL">All triage categories</option><option value="RED">RED</option><option value="YELLOW">YELLOW</option><option value="GREEN">GREEN</option></select></label>
+              <label class="filter-field"><span class="sr-only">Filter by status</span><select id="emergencyStatusFilter" class="form-select"><option value="ACTIVE">Active cases</option><option value="ALL">All statuses</option><option value="NEW">New</option><option value="WAITING">Waiting</option><option value="MATCHING">Matching</option><option value="ALLOCATED">Allocated</option><option value="IN_TREATMENT">In treatment</option><option value="COMPLETED">Completed</option><option value="CANCELLED">Cancelled</option></select></label>
+              <span id="queueResultCount" class="filter-result-count"></span>
+            </div>
+
+            <div class="table-scroll">
+              <table class="matrix-table" id="emergencyQueueTable">
+                <thead>
+                  <tr><th>ID</th><th>Patient</th><th>Emergency</th><th>Priority</th><th>Status</th><th>Hospital</th><th>Ambulance</th><th>Registered</th></tr>
+                </thead>
+                <tbody id="emergencyQueueTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" id="caseTrackerPanel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">Case tracker</span>
+              <p class="panel-caption" id="caseTrackerCaption">Select a case in the queue.</p>
+            </div>
+            <div class="panel-actions" id="caseTrackerActions"></div>
+          </div>
+          <div class="lifecycle-tracker-wrap">
+            <div class="lifecycle-tracker-label">Case lifecycle</div>
+            <div class="state-tracker" id="lifecycleTracker">
+              <div class="state-step-wrap"><div class="state-step" data-state="NEW"><div class="state-node">1</div><span class="state-label">New</span></div><div class="state-connector"></div></div>
+              <div class="state-step-wrap"><div class="state-step" data-state="WAITING"><div class="state-node">2</div><span class="state-label">Waiting</span></div><div class="state-connector"></div></div>
+              <div class="state-step-wrap"><div class="state-step" data-state="MATCHING"><div class="state-node">3</div><span class="state-label">Matching</span></div><div class="state-connector"></div></div>
+              <div class="state-step-wrap"><div class="state-step" data-state="ALLOCATED"><div class="state-node">4</div><span class="state-label">Allocated</span></div><div class="state-connector"></div></div>
+              <div class="state-step-wrap"><div class="state-step" data-state="IN_TREATMENT"><div class="state-node">5</div><span class="state-label">In treatment</span></div><div class="state-connector"></div></div>
+              <div class="state-step-wrap"><div class="state-step" data-state="COMPLETED"><div class="state-node">6</div><span class="state-label">Completed</span></div></div>
+            </div>
+          </div>
+          <div id="caseTrackerBody"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Recommendation + referral initiation ═══════════ -->
+      <section id="tab-roadside" class="tab-pane" data-roles="ADMIN">
+        <div class="grid-2col roadside-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="panel-title">Where and what</span>
+                <p class="panel-caption">The patient's position (GPS or typed coordinates; no map) and what you can see.</p>
+              </div>
+            </div>
+            <form id="roadsideForm" class="roadside-form" novalidate>
+              <fieldset class="form-fieldset">
+                <legend class="form-label">1. Location</legend>
+                <div class="row">
+                  <button id="rsGpsBtn" class="btn btn-secondary" type="button">Use my GPS location</button>
+                </div>
+                <p id="rsGpsStatus" class="field-caption" role="status"></p>
+                <div class="form-group">
+                  <label class="form-label" for="rsLocality">Dehradun locality</label>
+                  <select id="rsLocality" class="form-select locality-select" data-lat="rsLat" data-lng="rsLng" data-place="rsPlace"><option value="">Choose a locality, or use GPS / type the coordinates</option></select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="rsPlace">Address or landmark (optional)</label>
+                  <input id="rsPlace" class="form-input" type="text" maxlength="200" placeholder="e.g. Ring Road flyover, near the metro pillar 42">
+                </div>
+                <div class="grid-2col">
+                  <div class="form-group">
+                    <label class="form-label" for="rsLat">Latitude</label>
+                    <input id="rsLat" class="form-input" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 30.3165">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label" for="rsLng">Longitude</label>
+                    <input id="rsLng" class="form-input" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 78.0322">
+                  </div>
+                </div>
+              </fieldset>
+              <fieldset class="form-fieldset">
+                <legend class="form-label">2. Injuries</legend>
+                <div class="form-group">
+                  <label class="form-label" for="rsInjuries">Describe what you see</label>
+                  <textarea id="rsInjuries" class="form-input" rows="3" maxlength="2000" placeholder="e.g. Rider unconscious, bleeding from the head"></textarea>
+                  <div class="row">
+                    <button id="rsMicBtn" class="btn btn-secondary btn-sm" type="button" hidden>Dictate</button>
+                    <span id="rsMicStatus" class="field-caption" role="status"></span>
+                  </div>
+                </div>
+                <div id="rsTags" class="roadside-tags" role="group" aria-label="Signs you can see"></div>
+              </fieldset>
+              <fieldset class="form-fieldset">
+                <legend class="form-label">3. Patient (for the pre-alert)</legend>
+                <div class="grid-2col">
+                  <div class="form-group">
+                    <label class="form-label" for="rsName">Name</label>
+                    <input id="rsName" class="form-input" type="text" maxlength="150" value="Unknown">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label" for="rsAge">Estimated age (years)</label>
+                    <input id="rsAge" class="form-input" type="number" min="0" max="130" step="1" inputmode="numeric">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="rsGender">Sex</label>
+                  <select id="rsGender" class="form-select">
+                    <option value="UNKNOWN">Unknown</option>
+                    <option value="MALE">Male</option>
+                    <option value="FEMALE">Female</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </div>
+              </fieldset>
+              <p id="rsFormError" class="form-error" role="alert" hidden></p>
+              <button id="rsAssessBtn" class="btn btn-primary btn-block" type="submit">Assess and find hospitals</button>
+            </form>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="panel-title">Triage and nearest suitable hospitals</span>
+                <p class="panel-caption">Live capacity from the server. The triage is a decision aid, not a diagnosis.</p>
+              </div>
+            </div>
+            <div id="rsResult"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Mass casualty (ADMIN) ═══════════ -->
+      <section id="tab-mci" class="tab-pane" data-roles="ADMIN">
+        <div class="grid-2col mci-top">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <span class="panel-title">Incidents</span>
+                <p class="panel-caption">Open an incident to see its victims, or register a new one.</p>
+              </div>
+              <div class="panel-actions">
+                <button id="mciDemoBtn" class="btn btn-secondary btn-sm" type="button">Load bus crash demo</button>
+              </div>
+            </div>
+            <p id="mciListMessage" class="form-error" role="alert" hidden></p>
+            <div id="mciList"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><div><span class="panel-title">New incident</span><p class="panel-caption">Where and what. Victims are added on the incident page.</p></div></div>
+            <form id="mciCreateForm" class="roadside-form" novalidate>
+              <div class="form-group"><label class="form-label" for="mciTitle">Title</label><input id="mciTitle" class="form-input" type="text" maxlength="150" placeholder="e.g. Highway bus accident" autocomplete="off"></div>
+              <div class="grid-2col">
+                <div class="form-group"><label class="form-label" for="mciType">Type</label>
+                  <select id="mciType" class="form-select">
+                    <option value="bus_crash">Bus crash</option><option value="road_accident">Road accident</option><option value="train_accident">Train accident</option>
+                    <option value="building_collapse">Building collapse</option><option value="fire">Fire</option><option value="industrial_accident">Industrial accident</option><option value="other">Other</option>
+                  </select></div>
+                <div class="form-group"><label class="form-label" for="mciSeverity">Severity</label>
+                  <select id="mciSeverity" class="form-select"><option value="low">Low</option><option value="moderate">Moderate</option><option value="high" selected>High</option><option value="critical">Critical</option></select></div>
+              </div>
+              <div class="form-group"><label class="form-label" for="mciLocality">Dehradun locality</label>
+                <select id="mciLocality" class="form-select locality-select" data-lat="mciLat" data-lng="mciLng" data-place="mciPlace"><option value="">Choose a locality, or type the coordinates</option></select></div>
+              <div class="form-group"><label class="form-label" for="mciPlace">Place</label><input id="mciPlace" class="form-input" type="text" maxlength="200" placeholder="e.g. NH-48 near Mahipalpur flyover"></div>
+              <div class="grid-2col">
+                <div class="form-group"><label class="form-label" for="mciLat">Latitude</label><input id="mciLat" class="form-input" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 30.3165"></div>
+                <div class="form-group"><label class="form-label" for="mciLng">Longitude</label><input id="mciLng" class="form-input" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 78.0322"></div>
+              </div>
+              <div class="grid-2col">
+                <div class="form-group"><label class="form-label" for="mciEstimated">Estimated victims</label><input id="mciEstimated" class="form-input" type="number" min="0" max="1000" step="1" inputmode="numeric"></div>
+                <div class="form-group"><label class="form-label" for="mciVehicles">Vehicles involved</label><input id="mciVehicles" class="form-input" type="number" min="0" max="500" step="1" inputmode="numeric"></div>
+              </div>
+              <div class="form-group"><label class="form-label" for="mciOccurred">Occurred at</label><input id="mciOccurred" class="form-input" type="datetime-local"></div>
+              <div class="form-group"><label class="form-label" for="mciDescription">Description</label><textarea id="mciDescription" class="form-input" rows="2" maxlength="2000"></textarea></div>
+              <p id="mciCreateError" class="form-error" role="alert" hidden></p>
+              <button id="mciCreateBtn" class="btn btn-primary btn-block" type="submit">Create incident</button>
+            </form>
+          </div>
+        </div>
+        <div class="panel" id="mciIncidentPanel">
+          <div class="panel-header"><div><span class="panel-title">Incident</span><p class="panel-caption" id="mciIncidentCaption">Open an incident from the list.</p></div></div>
+          <div id="mciIncident"></div>
+          <div id="mciAdd" class="mci-add" hidden>
+            <h3 class="section-subtitle">Add victims</h3>
+            <p class="field-caption">One row per victim. A name is not needed: the server gives unnamed victims a label (MCI-001, …). Age may be left empty.</p>
+            <div class="row mci-rows-count">
+              <label class="form-label" for="mcCount">Rows</label>
+              <input id="mcCount" class="form-input mc-count" type="number" min="1" max="100" step="1" inputmode="numeric" value="5">
+              <button id="mcRowsBtn" class="btn btn-secondary btn-sm" type="button">Set rows</button>
+            </div>
+            <div class="mc-fill" role="group" aria-label="Quick defaults for all rows">
+              <span class="field-caption">All rows:</span>
+              <select id="mcFillTriage" class="form-select" aria-label="Triage for all rows"></select>
+              <select id="mcFillInjury" class="form-select" aria-label="Main injury for all rows"></select>
+              <button id="mcFillBtn" class="btn btn-secondary btn-sm" type="button">Apply to all</button>
+            </div>
+            <div id="mcRows" class="mc-rows"></div>
+            <p id="mcError" class="form-error" role="alert" hidden></p>
+            <button id="mcSaveBtn" class="btn btn-emergency btn-block" type="button">Save victims</button>
+            <h3 class="section-subtitle">Import from a CSV file</h3>
+            <p class="field-caption">First line: column names. Columns: full_name, age, gender, triage_category (RED, YELLOW or GREEN), emergency_type, injury_description, transport_required (yes/no). The server checks every row before anything is saved.</p>
+            <input id="csvFile" class="form-input" type="file" accept=".csv,text/csv" aria-label="CSV file of victims">
+            <div id="csvPreview"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-ranking" class="tab-pane" data-roles="ADMIN">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">Hospitals for the selected case</span>
+              <p class="panel-caption">Live capacity from the server, filtered by this case's own resources and specialist. The server re-checks everything when you send the referral.</p>
+            </div>
+            <span class="panel-badge">Advisory score</span>
+          </div>
+          <div id="rankingCaseSummary"></div>
+          <div id="rankingReferralStatus"></div>
+          <div id="rankingResultsContainer"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Acceptance console ═══════════ -->
+      <section id="tab-acceptance" class="tab-pane" data-roles="ADMIN HOSPITAL_DESK">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">Incoming referrals</span>
+              <p class="panel-caption">Each referral holds the resources for 90 seconds. Accept to commit them, or reject to release them; an unanswered referral expires and the server moves to the next hospital.</p>
+            </div>
+            <span class="panel-badge">GET /referrals/active</span>
+          </div>
+          <div id="acceptanceConsoleContent"></div>
+        </div>
+        <div class="panel" id="hospitalPatientsPanel" data-roles="HOSPITAL_DESK">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">Patients</span>
+              <p class="panel-caption">Cases your hospital accepted. In order: confirm arrival, allocate a bed, start treatment, add notes, complete treatment (this releases the bed and equipment).</p>
+            </div>
+            <span class="panel-badge">GET /hospitals/:id/patients</span>
+          </div>
+          <div id="hospitalPatientsContent"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><div><span class="panel-title">Decisions in this session</span><p class="panel-caption">Server responses to accept and reject, and referral events received live.</p></div></div>
+          <div id="acceptanceResult"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Hospitals ═══════════ -->
+      <section id="tab-hospitals" class="tab-pane">
+        <div class="panel">
+          <div class="panel-header">
+            <div><span class="panel-title">Hospital directory</span><p class="panel-caption">Free = available minus soft-locked units. Specialists count only when on duty and available.</p></div>
+          </div>
+          <div class="filter-bar" aria-label="Hospital filters">
+            <label class="filter-field search-field"><span class="sr-only">Search hospitals</span><input id="hospitalSearch" class="form-input" type="search" placeholder="Search facility or district"></label>
+            <label class="filter-field"><span class="sr-only">Filter hospitals by status</span><select id="hospitalStatusFilter" class="form-select"><option value="ALL">All statuses</option><option value="OPEN">Open</option><option value="LIMITED">Limited</option><option value="CLOSED">Closed</option></select></label>
+            <span id="hospitalResultsCount" class="filter-result-count"></span>
+          </div>
+          <div id="hospitalsManagementGrid" class="grid-3col"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Audit (ADMIN) ═══════════ -->
+      <section id="tab-activity" class="tab-pane" data-roles="ADMIN">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">Audit ledger</span>
+              <p class="panel-caption">The server's append-only, hash-chained audit trail (newest first). Verification recomputes the whole chain on the server.</p>
+            </div>
+            <div class="panel-actions">
+              <button id="btnVerifyAuditChain" class="btn btn-primary btn-sm" type="button">Verify audit chain</button>
+              <button id="btnExportAuditLedgerCsv" class="btn btn-secondary btn-sm" type="button">Export CSV</button>
+            </div>
+          </div>
+          <div id="auditVerifyResult" class="audit-summary-grid"></div>
+          <div class="filter-bar">
+            <label class="filter-field search-field"><span class="sr-only">Filter by case</span><input id="auditCaseFilter" class="form-input" type="search" placeholder="Filter by case ID or event"></label>
+            <span id="auditResultCount" class="filter-result-count"></span>
+          </div>
+          <div class="table-scroll table-tall">
+            <table class="matrix-table">
+              <thead><tr><th>Seq</th><th>Time</th><th>Event</th><th>Case</th><th>Hospital</th><th>Change</th><th>Actor</th><th>Row hash</th></tr></thead>
+              <tbody id="auditLedgerTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Analytics (ADMIN) ═══════════ -->
+      <section id="tab-analytics" class="tab-pane" data-roles="ADMIN">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">My registered patients</span>
+              <p class="panel-caption">Cases you registered, with the times recorded by the server. An average needs the server's minimum sample; below it the figure is shown as insufficient data.</p>
+            </div>
+            <div class="panel-actions">
+              <label class="sr-only" for="registrationsWindow">Time window</label>
+              <select id="registrationsWindow" class="form-select form-select-inline">
+                <option value="7">Last 7 days</option>
+                <option value="28" selected>Last 28 days</option>
+                <option value="90">Last 90 days</option>
+              </select>
+              <button id="btnExportRegistrationsCsv" class="btn btn-secondary btn-sm" type="button">Export CSV</button>
+            </div>
+          </div>
+          <div id="registrationsContent"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Command center ═══════════ -->
+      <section id="tab-command" class="tab-pane active" data-roles="ADMIN">
+        <div class="kpi-grid" id="kpiGrid">
+          <div class="kpi-card"><div class="kpi-header"><span class="kpi-title">Active emergencies</span><span class="kpi-icon" aria-hidden="true">🚨</span></div><div id="kpiActiveEmergencies" class="kpi-value">—</div><div class="kpi-subtext">Not completed or cancelled</div></div>
+          <div class="kpi-card kpi-critical"><div class="kpi-header"><span class="kpi-title">Critical P1 waiting</span><span class="kpi-icon" aria-hidden="true">⚡</span></div><div id="kpiCriticalWaiting" class="kpi-value">—</div><div class="kpi-subtext">Awaiting allocation</div></div>
+          <div class="kpi-card"><div class="kpi-header"><span class="kpi-title">ICU beds free</span><span class="kpi-icon" aria-hidden="true">🛏️</span></div><div id="kpiIcuAvailable" class="kpi-value">—</div><div id="kpiIcuSub" class="kpi-subtext">Excludes soft-locked beds</div></div>
+          <div class="kpi-card"><div class="kpi-header"><span class="kpi-title">Ventilators free</span><span class="kpi-icon" aria-hidden="true">🫁</span></div><div id="kpiVentilatorsAvailable" class="kpi-value">—</div><div id="kpiVentSub" class="kpi-subtext">Excludes soft-locked units</div></div>
+          <div class="kpi-card"><div class="kpi-header"><span class="kpi-title">Hospitals open</span><span class="kpi-icon" aria-hidden="true">🏥</span></div><div id="kpiHospitalsOpen" class="kpi-value">—</div><div id="kpiHospitalsStatus" class="kpi-subtext">Network status</div></div>
+          <div class="kpi-card"><div class="kpi-header"><span class="kpi-title">Ambulances available</span><span class="kpi-icon" aria-hidden="true">🚑</span></div><div id="kpiAmbulancesAvail" class="kpi-value">—</div><div class="kpi-subtext">Ready to dispatch</div></div>
+          <div class="kpi-card kpi-warning"><div class="kpi-header"><span class="kpi-title">Pending referrals</span><span class="kpi-icon" aria-hidden="true">⏳</span></div><div id="kpiReferralsPending" class="kpi-value">—</div><div class="kpi-subtext">Soft-locks awaiting a hospital</div></div>
+          <div class="kpi-card kpi-success" data-roles="ADMIN"><div class="kpi-header"><span class="kpi-title">Accepted referrals</span><span class="kpi-icon" aria-hidden="true">✓</span></div><div id="kpiReferralsAccepted" class="kpi-value">—</div><div class="kpi-subtext">All time</div></div>
+          <div class="kpi-card kpi-critical" data-roles="ADMIN"><div class="kpi-header"><span class="kpi-title">Rejected or expired</span><span class="kpi-icon" aria-hidden="true">!</span></div><div id="kpiReferralsClosed" class="kpi-value">—</div><div class="kpi-subtext">All time</div></div>
+        </div>
+        <p class="field-caption" id="kpiUpdatedAt"></p>
+
+        <div class="panel">
+          <div class="panel-header"><div><span class="panel-title">Hospital capacity</span><p class="panel-caption">Free ICU beds per facility (GET /analytics/dashboard).</p></div></div>
+          <div id="hospitalsDirectoryGrid" class="grid-3col"></div>
+        </div>
+
+        <div class="dashboard-grid" aria-label="Operational overview">
+          <div class="dashboard-main">
+            <section class="panel dashboard-panel">
+              <div class="panel-header">
+                <div><span class="panel-title">Highest-risk active cases</span><p class="panel-caption">Top of the server's priority queue.</p></div>
+                <button type="button" class="btn btn-secondary btn-sm" data-navigate="tab-ingestion">Open queue</button>
+              </div>
+              <div class="table-scroll compact-table"><table class="matrix-table"><thead><tr><th>Case</th><th>Patient</th><th>Priority</th><th>State</th><th>Hospital</th></tr></thead><tbody id="commandPriorityQueueBody"></tbody></table></div>
+            </section>
+          </div>
+          <aside class="dashboard-rail">
+            <section class="panel dashboard-panel" data-roles="ADMIN"><div class="panel-header"><div><span class="panel-title">Referral outcomes</span><p class="panel-caption">GET /analytics/referrals</p></div></div><div id="commandReferralSummary" class="summary-list"></div></section>
+            <section class="panel dashboard-panel"><div class="panel-header"><div><span class="panel-title">Fleet readiness</span><p class="panel-caption">GET /ambulances</p></div><button type="button" class="btn btn-secondary btn-sm" data-navigate="tab-ambulance">View fleet</button></div><div id="commandFleetSummary" class="summary-list"></div></section>
+            <section class="panel dashboard-panel"><div class="panel-header"><div><span class="panel-title">Live events</span><p class="panel-caption">Received from the server since you signed in.</p></div></div><div id="commandActivityFeed" class="activity-feed"></div></section>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ═══════════ Banker's simulator (offline) ═══════════ -->
+      <section id="tab-bankers" class="tab-pane">
+        <div class="offline-sim-banner" role="note">
+          <strong>Offline teaching simulation.</strong>
+          It uses only the numbers typed below. It does not read live hospital data and never changes any case, resource or audit record.
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">Safe-state check</span>
+              <p class="panel-caption">Deadlock avoidance for compound resource requests.</p>
+            </div>
+            <span class="panel-badge">Simulation</span>
+          </div>
+
+          <div class="grid-2col">
+            <div>
+              <h3 class="step-heading">1. Available resources</h3>
+              <div class="vector-inputs">
+                <div><label for="avail0">ICU beds</label><input id="avail0" type="number" min="0" value="3" class="form-input"></div>
+                <div><label for="avail1">Ventilators</label><input id="avail1" type="number" min="0" value="3" class="form-input"></div>
+                <div><label for="avail2">Specialists</label><input id="avail2" type="number" min="0" value="2" class="form-input"></div>
+              </div>
+
+              <h3 class="step-heading">2. Allocation and maximum claims</h3>
+              <div class="table-scroll">
+                <table class="matrix-table matrix-inputs">
+                  <thead><tr><th>Process</th><th>Allocation [I, V, S]</th><th>Max claim [I, V, S]</th></tr></thead>
+                  <tbody>
+                    <tr><td>P0 cardiac</td>
+                      <td><input id="alloc_0_0" type="number" min="0" value="0" class="form-input" aria-label="P0 allocated ICU"><input id="alloc_0_1" type="number" min="0" value="1" class="form-input" aria-label="P0 allocated ventilators"><input id="alloc_0_2" type="number" min="0" value="0" class="form-input" aria-label="P0 allocated specialists"></td>
+                      <td><input id="max_0_0" type="number" min="0" value="7" class="form-input" aria-label="P0 max ICU"><input id="max_0_1" type="number" min="0" value="5" class="form-input" aria-label="P0 max ventilators"><input id="max_0_2" type="number" min="0" value="3" class="form-input" aria-label="P0 max specialists"></td></tr>
+                    <tr><td>P1 polytrauma</td>
+                      <td><input id="alloc_1_0" type="number" min="0" value="2" class="form-input" aria-label="P1 allocated ICU"><input id="alloc_1_1" type="number" min="0" value="0" class="form-input" aria-label="P1 allocated ventilators"><input id="alloc_1_2" type="number" min="0" value="0" class="form-input" aria-label="P1 allocated specialists"></td>
+                      <td><input id="max_1_0" type="number" min="0" value="3" class="form-input" aria-label="P1 max ICU"><input id="max_1_1" type="number" min="0" value="2" class="form-input" aria-label="P1 max ventilators"><input id="max_1_2" type="number" min="0" value="2" class="form-input" aria-label="P1 max specialists"></td></tr>
+                    <tr><td>P2 stroke</td>
+                      <td><input id="alloc_2_0" type="number" min="0" value="3" class="form-input" aria-label="P2 allocated ICU"><input id="alloc_2_1" type="number" min="0" value="0" class="form-input" aria-label="P2 allocated ventilators"><input id="alloc_2_2" type="number" min="0" value="2" class="form-input" aria-label="P2 allocated specialists"></td>
+                      <td><input id="max_2_0" type="number" min="0" value="9" class="form-input" aria-label="P2 max ICU"><input id="max_2_1" type="number" min="0" value="0" class="form-input" aria-label="P2 max ventilators"><input id="max_2_2" type="number" min="0" value="2" class="form-input" aria-label="P2 max specialists"></td></tr>
+                    <tr><td>P3 respiratory</td>
+                      <td><input id="alloc_3_0" type="number" min="0" value="2" class="form-input" aria-label="P3 allocated ICU"><input id="alloc_3_1" type="number" min="0" value="1" class="form-input" aria-label="P3 allocated ventilators"><input id="alloc_3_2" type="number" min="0" value="1" class="form-input" aria-label="P3 allocated specialists"></td>
+                      <td><input id="max_3_0" type="number" min="0" value="2" class="form-input" aria-label="P3 max ICU"><input id="max_3_1" type="number" min="0" value="2" class="form-input" aria-label="P3 max ventilators"><input id="max_3_2" type="number" min="0" value="2" class="form-input" aria-label="P3 max specialists"></td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <button id="btnRunBankers" class="btn btn-primary btn-block mt-md" type="button">Run safety check</button>
+            </div>
+
+            <div>
+              <h3 class="step-heading">3. Remaining need (max − allocation)</h3>
+              <div class="table-scroll">
+                <table class="matrix-table">
+                  <thead><tr><th>Process</th><th>ICU</th><th>Ventilator</th><th>Specialist</th></tr></thead>
+                  <tbody id="bankersNeedTableBody"></tbody>
+                </table>
+              </div>
+              <div id="bankersResultContainer"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">Compound claim tester</span>
+              <p class="panel-caption">Requests several resources at once and refuses any claim that would leave the simulated system unsafe.</p>
+            </div>
+            <span class="panel-badge">Simulation</span>
+          </div>
+
+          <div class="grid-2col align-start">
+            <div>
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label class="form-label" for="compoundProcessSelect">Requesting process</label>
+                  <select id="compoundProcessSelect" class="form-select">
+                    <option value="0">P0 cardiac patient</option>
+                    <option value="1" selected>P1 polytrauma patient</option>
+                    <option value="2">P2 stroke patient</option>
+                    <option value="3">P3 respiratory patient</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <span class="form-label">Request [ICU, vent, spec]</span>
+                  <div class="inline-inputs">
+                    <input id="claimReq0" type="number" value="1" min="0" max="10" class="form-input" aria-label="ICU beds">
+                    <input id="claimReq1" type="number" value="0" min="0" max="10" class="form-input" aria-label="Ventilators">
+                    <input id="claimReq2" type="number" value="2" min="0" max="10" class="form-input" aria-label="Specialists">
+                  </div>
+                </div>
+              </div>
+              <div class="inline-actions">
+                <button id="btnEvaluateCompoundClaim" class="btn btn-primary" type="button">Evaluate claim</button>
+                <button id="btnPreloadUnsafeClaim" class="btn btn-secondary" type="button">Try an unsafe claim (P0: 3, 3, 2)</button>
+              </div>
+            </div>
+            <div id="compoundClaimResultBox" class="inset-card result-box">
+              <div class="result-title">Result</div>
+              <div class="result-body">Choose a process and a request, then evaluate it.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Fleet ═══════════ -->
+      <section id="tab-ambulance" class="tab-pane" data-roles="ADMIN HOSPITAL_DESK PARAMEDIC">
+        <div class="panel">
+          <div class="panel-header">
+            <div><span class="panel-title">Ambulances</span><p class="panel-caption">Accepting a referral auto-dispatches a free unit when one exists. Dispatch here when a case still needs transport.</p></div>
+            <span class="panel-badge">PATCH /ambulances/:id/status</span>
+          </div>
+          <div class="filter-bar" aria-label="Ambulance filters">
+            <label class="filter-field search-field"><span class="sr-only">Search ambulances</span><input id="ambulanceSearch" class="form-input" type="search" placeholder="Search unit, vehicle or station"></label>
+            <label class="filter-field"><span class="sr-only">Filter ambulances by status</span><select id="ambulanceStatusFilter" class="form-select"><option value="ALL">All statuses</option><option value="AVAILABLE">Available</option><option value="DISPATCHED">Dispatched</option><option value="IN_TRANSIT">In transit</option><option value="MAINTENANCE">Maintenance</option></select></label>
+            <span id="ambulanceResultsCount" class="filter-result-count"></span>
+          </div>
+          <div id="ambulanceFleetGrid" class="grid-3col"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Map ═══════════ -->
+      <!-- ═══════════ Live tracking (simulated ambulance trips) ═══════════ -->
+      <section id="tab-tracking" class="tab-pane" data-roles="ADMIN HOSPITAL_DESK PARAMEDIC">
+        <div class="tracking-layout">
+          <div class="panel tracking-map-panel">
+            <div class="panel-header">
+              <div>
+                <span class="panel-title">Ambulance trips</span>
+                <p class="panel-caption"><span class="badge-status badge-limited">Simulated position — not real GPS</span> <span id="trackingRouteLabel"></span></p>
+              </div>
+            </div>
+            <div id="trackingMap" class="tracking-map" role="region" aria-label="Simulated Dehradun ambulance tracking map"></div>
+            <p class="field-caption trk-legend"><span class="trk-key trk-key-patient"></span> Ambulance to patient <span class="trk-key trk-key-hospital"></span> Patient to hospital · 🚑 ambulance · P pickup · H hospital</p>
+          </div>
+          <div class="panel tracking-side">
+            <div class="form-group">
+              <label class="form-label" for="trackingTripSelect">Trip</label>
+              <select id="trackingTripSelect" class="form-select"></select>
+            </div>
+            <div id="trackingDetails" aria-live="polite"></div>
+            <div id="trackingControls" class="tracking-controls"></div>
+            <p id="trackingMessage" class="form-error" role="alert" hidden></p>
+            <div id="trackingAdmin" data-roles="ADMIN"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-map" class="tab-pane" data-roles="ADMIN HOSPITAL_DESK">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">Capacity and incident map</span>
+              <p class="panel-caption">Hospitals coloured by free ICU share, ambulances at their last reported position, and active cases at their pickup point. <span class="badge-status badge-limited">Simulated positions — not real GPS</span></p>
+            </div>
+            <span class="panel-badge">Leaflet and OpenStreetMap</span>
+          </div>
+          <div class="map-toolbar">
+            <label><input type="checkbox" id="layerToggleHospitals" checked> Hospitals</label>
+            <label><input type="checkbox" id="layerToggleAmbulances" checked> Ambulances</label>
+            <label><input type="checkbox" id="layerToggleIncidents" checked> Active cases</label>
+            <button id="btnRecenterMap" class="btn btn-secondary btn-sm" type="button">Recentre map</button>
+          </div>
+          <div id="leafletMapContainer"></div>
+          <p class="field-caption" id="mapCaption">Schematic Dehradun demo area · fictional facilities and incidents · simulated positions, not live GPS.</p>
+          <div class="map-legend">
+            <div><i class="legend-dot legend-green"></i>20% or more ICU beds free</div>
+            <div><i class="legend-dot legend-amber"></i>Under 20% free</div>
+            <div><i class="legend-dot legend-red"></i>No free ICU beds, or closed</div>
+            <div><i class="legend-dot legend-blue"></i>Ambulance</div>
+            <div><i class="legend-dot legend-incident"></i>Active case pickup</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Specialists ═══════════ -->
+      <section id="tab-doctors" class="tab-pane" data-roles="ADMIN HOSPITAL_DESK">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">On-call specialists</span>
+              <p class="panel-caption">Who is on shift at each hospital, and whether they can take a case now.</p>
+            </div>
+            <button id="btnOpenAddDoctorModal" class="btn btn-primary btn-sm" type="button" data-roles="ADMIN HOSPITAL_DESK">Add specialist</button>
+          </div>
+
+          <div class="filter-bar">
+            <label class="filter-field search-field"><span class="sr-only">Search specialists</span><input id="doctorSearch" class="form-input" type="search" placeholder="Search specialist"></label>
+            <label class="filter-field"><span class="sr-only">Filter by hospital</span><select id="doctorFacilityFilter" class="form-select"><option value="ALL">All hospitals</option></select></label>
+            <label class="filter-field"><span class="sr-only">Filter by specialisation</span>
+              <select id="doctorSpecFilter" class="form-select">
+                <option value="ALL">All specialisations</option>
+                <option value="CARDIOLOGIST">Cardiologist</option>
+                <option value="NEUROLOGIST">Neurologist</option>
+                <option value="TRAUMA_SURGEON">Trauma surgeon</option>
+                <option value="PEDIATRICIAN">Paediatrician</option>
+                <option value="GENERAL_ER">General ER</option>
+              </select>
+            </label>
+            <label class="filter-field"><span class="sr-only">Filter by shift status</span>
+              <select id="doctorStatusFilter" class="form-select">
+                <option value="ALL">All shift statuses</option>
+                <option value="AVAILABLE">Available</option>
+                <option value="IN_PROCEDURE">In procedure</option>
+                <option value="OFF_DUTY">Off duty</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="table-scroll">
+            <table class="matrix-table">
+              <thead><tr><th>ID</th><th>Name</th><th>Hospital</th><th>Specialisation</th><th>Shift</th><th>Status</th></tr></thead>
+              <tbody id="doctorsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="addDoctorModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="addDoctorTitle">
+          <div class="modal-card modal-narrow">
+            <div class="modal-header">
+              <div class="modal-title-group">
+                <div>
+                  <h2 id="addDoctorTitle">Add a specialist</h2>
+                  <p>They will appear on the hospital's on-call roster.</p>
+                </div>
+              </div>
+              <button id="closeDoctorModalBtn" class="close-btn" type="button" aria-label="Close specialist form">&times;</button>
+            </div>
+            <form id="addDoctorForm">
+              <div class="form-group">
+                <label class="form-label" for="newDoctorHospital">Hospital</label>
+                <select id="newDoctorHospital" class="form-select" required></select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="newDoctorName">Full name</label>
+                <input type="text" id="newDoctorName" class="form-input" maxlength="150" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="newDoctorSpec">Specialisation</label>
+                <select id="newDoctorSpec" class="form-select" required>
+                  <option value="CARDIOLOGIST">Cardiologist</option>
+                  <option value="NEUROLOGIST">Neurologist</option>
+                  <option value="TRAUMA_SURGEON">Trauma surgeon</option>
+                  <option value="PEDIATRICIAN">Paediatrician</option>
+                  <option value="GENERAL_ER">General emergency physician</option>
+                </select>
+              </div>
+              <div class="grid-2col">
+                <div class="form-group">
+                  <label class="form-label" for="newDoctorShiftStart">Shift starts</label>
+                  <input type="time" id="newDoctorShiftStart" class="form-input" value="08:00" required>
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="newDoctorShiftEnd">Shift ends</label>
+                  <input type="time" id="newDoctorShiftEnd" class="form-input" value="20:00" required>
+                </div>
+              </div>
+              <div id="addDoctorError" class="form-error" role="alert" hidden></div>
+              <button type="submit" class="btn btn-primary btn-block">Add to roster</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════ First aid guide (static, read-only; every staff role) ═══════════ -->
+      <section id="tab-firstaid" class="tab-pane">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">First aid guide</span>
+              <p class="panel-caption">General first aid while help is on the way. Read-only: nothing is sent or saved.</p>
+            </div>
+          </div>
+          <div id="firstAidStaff" class="firstaid"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════ Accounts (ADMIN) ═══════════ -->
+      <section id="tab-accounts" class="tab-pane" data-roles="ADMIN">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-title">Accounts</span>
+              <p class="panel-caption">GET /admin/users. Passwords are never shown, and this page does not keep them.</p>
+            </div>
+            <button id="btnNewAccount" class="btn btn-primary btn-sm" type="button">New account</button>
+          </div>
+          <div class="filter-bar">
+            <label class="filter-field"><span class="sr-only">Filter by role</span>
+              <select id="accountRoleFilter" class="form-select">
+                <option value="">All roles</option>
+                <option value="ADMIN">Administrator</option>
+                <option value="HOSPITAL_DESK">Hospital desk</option>
+                <option value="PARAMEDIC">Fleet (ambulance crew)</option>
+              </select>
+            </label>
+            <label class="filter-field"><span class="sr-only">Filter by status</span>
+              <select id="accountActiveFilter" class="form-select">
+                <option value="">Active and inactive</option>
+                <option value="true">Active only</option>
+                <option value="false">Inactive only</option>
+              </select>
+            </label>
+            <span id="accountResultCount" class="filter-result-count"></span>
+          </div>
+          <div class="table-scroll">
+            <table class="matrix-table" id="accountsTable">
+              <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Linked to</th><th>Status</th><th>Last sign-in</th><th>Actions</th></tr></thead>
+              <tbody id="accountsTableBody"></tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <button id="accountsPrev" class="btn btn-secondary btn-sm" type="button">Previous</button>
+            <button id="accountsNext" class="btn btn-secondary btn-sm" type="button">Next</button>
+          </div>
+        </div>
+        <div class="panel" id="accountFormPanel" hidden></div>
+      </section>
+
+      </div>
+    </main>
+
+    <footer class="app-footer">
+      <div class="shell">
+        <div class="footer-grid">
+          <div class="footer-brand">
+            <div class="brand-section">
+              <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+              <div class="brand-title"><strong>ERIS</strong></div>
+            </div>
+            <p>Sends each patient to the nearest hospital that can actually treat them, and holds the bed until that hospital says yes.</p>
+            <p>A resource coordination tool. It does not diagnose patients or prescribe treatment.</p>
+          </div>
+          <nav class="footer-col" aria-label="Project">
+            <h2>Project</h2>
+            <ul>
+              <li><a href="https://github.com/aviralmittal7150/SMART-EMERGENCY-RESOURCE-ALLOCATION-HOSPITAL-REFERRAL-SYSTEM" target="_blank" rel="noopener">GitHub</a></li>
+              <li><a href="PRD.md" target="_blank" rel="noopener">Product requirements</a></li>
+              <li><a href="WORKFLOW.md" target="_blank" rel="noopener">Workflow</a></li>
+              <li><a href="AGENTS.md" target="_blank" rel="noopener">Contributor handbook</a></li>
+            </ul>
+          </nav>
+        </div>
+        <div class="footer-base">
+          <span>Smart Emergency Resource Allocation &amp; Hospital Referral System</span>
+          <span>OS and DBMS academic project</span>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- ═══════════ SIGN-IN PORTAL (shown whenever there is no valid session) ═══════════ -->
+  <div id="authPortalModal" class="modal-overlay auth-portal" role="dialog" aria-modal="true" aria-labelledby="authPortalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <div>
+            <h2 id="authPortalTitle">Sign in to ERIS</h2>
+            <p>Your role (Admin, Hospital or Fleet) comes from your account; each role sees only what it may use.</p>
+          </div>
+        </div>
+      </div>
+      <div id="authBootStatus" class="auth-info-banner" hidden>Checking your session…</div>
+      <div id="authNotice" class="auth-info-banner" role="status" hidden></div>
+      <form id="loginForm" class="auth-form">
+        <div class="form-group">
+          <label class="form-label" for="loginUsername">Username or call sign</label>
+          <input type="text" id="loginUsername" class="form-input" autocomplete="username" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="loginPassword">Password</label>
+          <div class="password-field">
+            <input type="password" id="loginPassword" class="form-input" autocomplete="current-password" required>
+            <button type="button" class="btn btn-secondary btn-sm password-toggle" id="loginPasswordToggle" aria-controls="loginPassword" aria-pressed="false">Show password</button>
+          </div>
+        </div>
+        <div id="authFormError" class="form-error" role="alert" hidden></div>
+        <button type="submit" class="btn btn-primary btn-block" id="loginSubmitBtn">Sign in</button>
+      </form>
+      <p class="auth-firstaid"><button type="button" class="link-button" id="firstAidLink" aria-haspopup="dialog">First aid guide</button> · no sign-in needed</p>
+    </div>
+  </div>
+
+  <!-- First aid guide as a dialog: opened from the sign-in screen (signed out). -->
+  <div id="firstAidOverlay" class="firstaid-overlay" role="dialog" aria-modal="true" aria-labelledby="firstAidOverlayTitle" hidden>
+    <div class="firstaid-sheet">
+      <div class="firstaid-sheet-head">
+        <h2 id="firstAidOverlayTitle">First aid guide</h2>
+        <button type="button" class="btn btn-secondary btn-sm" id="firstAidClose">Close</button>
+      </div>
+      <div id="firstAidOverlayBody" class="firstaid"></div>
+    </div>
+  </div>
+
+  <!-- Socket.IO client, served by the Socket.IO server itself (same origin). -->
+  <script src="/socket.io/socket.io.min.js"></script>
+  <!-- Leaflet (regional map), pinned by Subresource Integrity. -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+
+  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/ui-effects.js"></script>
+</body>
+</html>
